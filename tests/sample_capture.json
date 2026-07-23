@@ -1,0 +1,44 @@
+[
+  {
+    "frame": {"frame.number": ["1"], "frame.time_epoch": ["100.0"], "frame.time": "100.0"},
+    "ip": {"ip.src": "192.168.1.10", "ip.dst": "192.168.1.50"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["14"], "ngap.RAN_UE_NGAP_ID": ["15"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Registration request"]}
+  },
+  {
+    "frame": {"frame.number": ["2"], "frame.time_epoch": ["100.1"], "frame.time": "100.1"},
+    "ip": {"ip.src": "192.168.1.50", "ip.dst": "192.168.1.10"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["15"], "ngap.RAN_UE_NGAP_ID": ["15"], "ngap.AMF_UE_NGAP_ID": ["302"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Authentication request"]}
+  },
+  {
+    "frame": {"frame.number": ["3"], "frame.time_epoch": ["100.2"], "frame.time": "100.2"},
+    "ip": {"ip.src": "192.168.1.10", "ip.dst": "192.168.1.50"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["16"], "ngap.RAN_UE_NGAP_ID": ["15"], "ngap.AMF_UE_NGAP_ID": ["302"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Authentication response"]}
+  },
+  {
+    "frame": {"frame.number": ["4"], "frame.time_epoch": ["100.3"], "frame.time": "100.3"},
+    "ip": {"ip.src": "192.168.1.50", "ip.dst": "192.168.1.10"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["15"], "ngap.RAN_UE_NGAP_ID": ["15"], "ngap.AMF_UE_NGAP_ID": ["302"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Security mode command"]}
+  },
+  {
+    "frame": {"frame.number": ["5"], "frame.time_epoch": ["100.4"], "frame.time": "100.4"},
+    "ip": {"ip.src": "192.168.1.10", "ip.dst": "192.168.1.50"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["16"], "ngap.RAN_UE_NGAP_ID": ["15"], "ngap.AMF_UE_NGAP_ID": ["302"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Security mode complete"]}
+  },
+  {
+    "frame": {"frame.number": ["6"], "frame.time_epoch": ["100.5"], "frame.time": "100.5"},
+    "ip": {"ip.src": "192.168.1.50", "ip.dst": "192.168.1.10"},
+    "sctp": {"sctp.srcport": "38412", "sctp.dstport": "38412", "sctp.stream": "1"},
+    "ngap": {"ngap.procedureCode": ["15"], "ngap.RAN_UE_NGAP_ID": ["15"], "ngap.AMF_UE_NGAP_ID": ["302"]},
+    "nas-5gs": {"nas_5gs.mm.message_type": ["Registration accept"]}
+  }
+]

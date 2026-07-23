@@ -1,0 +1,193 @@
+{
+  "pcap_file": "tests/sample_capture.json",
+  "total_frames_analyzed": 6,
+  "malformed_frames_skipped": 0,
+  "global_observations": [],
+  "ng_setup_procedures": [],
+  "sctp_events": [],
+  "ue_contexts": [
+    {
+      "context_id": "UE_1",
+      "ran_ue_ngap_id": 15,
+      "amf_ue_ngap_id": 302,
+      "fiveg_s_tmsi": null,
+      "gnb_ip": "192.168.1.10",
+      "amf_ip": "192.168.1.50",
+      "procedures": [
+        {
+          "name": "Registration",
+          "status": "Completed",
+          "start_time": 100.0,
+          "end_time": 100.5,
+          "last_observed_msg": "Registration Accept",
+          "expected_next_msg": null,
+          "failure_cause": null,
+          "evidence": [],
+          "observations": [
+            "Registration completed successfully."
+          ],
+          "events_frames": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ]
+        },
+        {
+          "name": "Authentication",
+          "status": "Completed",
+          "start_time": 100.1,
+          "end_time": 100.2,
+          "last_observed_msg": "Authentication Response",
+          "expected_next_msg": null,
+          "failure_cause": null,
+          "evidence": [],
+          "observations": [
+            "Authentication Successful"
+          ],
+          "events_frames": [
+            2,
+            3
+          ]
+        },
+        {
+          "name": "Security Mode",
+          "status": "Completed",
+          "start_time": 100.3,
+          "end_time": 100.4,
+          "last_observed_msg": "Security Mode Complete",
+          "expected_next_msg": null,
+          "failure_cause": null,
+          "evidence": [],
+          "observations": [
+            "Security Completed"
+          ],
+          "events_frames": [
+            4,
+            5
+          ]
+        }
+      ],
+      "explicit_failures": [],
+      "incomplete_procedures": [],
+      "diagnostic_observations": [
+        "NG Setup completed successfully.",
+        "Identifier continuity maintained.",
+        "No protocol anomalies detected."
+      ],
+      "timeline": [
+        {
+          "frame_number": 1,
+          "timestamp": "100.0",
+          "protocol": "NGAP",
+          "direction": "gNB -> AMF",
+          "message_type": "Registration Request",
+          "procedure_code": "14",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": null,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.10",
+          "dst_ip": "192.168.1.50",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        },
+        {
+          "frame_number": 2,
+          "timestamp": "100.1",
+          "protocol": "NGAP",
+          "direction": "AMF -> gNB",
+          "message_type": "Authentication Request",
+          "procedure_code": "15",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": 302,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.50",
+          "dst_ip": "192.168.1.10",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        },
+        {
+          "frame_number": 3,
+          "timestamp": "100.2",
+          "protocol": "NGAP",
+          "direction": "gNB -> AMF",
+          "message_type": "Authentication Response",
+          "procedure_code": "16",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": 302,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.10",
+          "dst_ip": "192.168.1.50",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        },
+        {
+          "frame_number": 4,
+          "timestamp": "100.3",
+          "protocol": "NGAP",
+          "direction": "AMF -> gNB",
+          "message_type": "Security Mode Command",
+          "procedure_code": "15",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": 302,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.50",
+          "dst_ip": "192.168.1.10",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        },
+        {
+          "frame_number": 5,
+          "timestamp": "100.4",
+          "protocol": "NGAP",
+          "direction": "gNB -> AMF",
+          "message_type": "Security Mode Complete",
+          "procedure_code": "16",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": 302,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.10",
+          "dst_ip": "192.168.1.50",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        },
+        {
+          "frame_number": 6,
+          "timestamp": "100.5",
+          "protocol": "NGAP",
+          "direction": "AMF -> gNB",
+          "message_type": "Registration Accept",
+          "procedure_code": "15",
+          "cause_code": null,
+          "ran_ue_ngap_id": 15,
+          "amf_ue_ngap_id": 302,
+          "fiveg_s_tmsi": null,
+          "pdu_session_id": null,
+          "src_ip": "192.168.1.50",
+          "dst_ip": "192.168.1.10",
+          "src_port": 38412,
+          "dst_port": 38412,
+          "sctp_stream": 1
+        }
+      ]
+    }
+  ],
+  "diagnostic_observations": []
+}

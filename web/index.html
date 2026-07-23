@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NGAP / NAS Wireshark Diagnostic Analyzer</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="brand">
+                <div class="logo-icon">📡</div>
+                <div>
+                    <h1>NGAP / NAS Diagnostic Analyzer</h1>
+                    <p class="subtitle">5G N2 Protocol Signalling & UE Context State Reconstructor</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="btn-load-sample" class="btn btn-secondary">
+                    <span>⚡ Load Sample Capture</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Dropzone / File Upload -->
+        <section class="upload-section">
+            <div id="dropzone" class="dropzone">
+                <input type="file" id="file-input" accept=".pcap,.pcapng,.json" hidden>
+                <div class="dropzone-content">
+                    <div class="cloud-icon">📥</div>
+                    <h3>Drag & Drop 5G Capture File (.pcap, .pcapng, .json)</h3>
+                    <p>or click to select a packet capture file from your system</p>
+                    <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
+                        Select Capture File
+                    </button>
+                </div>
+                <div id="upload-spinner" class="spinner-overlay hidden">
+                    <div class="spinner"></div>
+                    <p id="spinner-text">Analyzing NGAP / NAS Signalling...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Summary Metric Cards -->
+        <section id="metrics-section" class="metrics-section hidden">
+            <div class="metric-card metric-blue">
+                <div class="metric-title">Total Frames</div>
+                <div id="metric-frames" class="metric-value">0</div>
+                <div id="metric-file" class="metric-sub">No file loaded</div>
+            </div>
+            <div class="metric-card metric-purple">
+                <div class="metric-title">Identified UEs</div>
+                <div id="metric-ues" class="metric-value">0</div>
+                <div class="metric-sub">Active UE Contexts</div>
+            </div>
+            <div class="metric-card metric-red">
+                <div class="metric-title">Explicit Failures</div>
+                <div id="metric-failures" class="metric-value">0</div>
+                <div class="metric-sub">Confirmed Protocol Rejects</div>
+            </div>
+            <div class="metric-card metric-amber">
+                <div class="metric-title">Incomplete Procedures</div>
+                <div id="metric-incomplete" class="metric-value">0</div>
+                <div class="metric-sub">Truncated Capture Sequences</div>
+            </div>
+        </section>
+
+        <!-- Filter & Search Bar -->
+        <section id="filter-section" class="filter-section hidden">
+            <div class="filter-controls-row">
+                <div class="filter-tabs">
+                    <button class="filter-tab active" data-filter="all">All UEs (<span id="count-all">0</span>)</button>
+                    <button class="filter-tab tab-red" data-filter="failed">Explicit Failures 🔴 (<span
+                            id="count-failed">0</span>)</button>
+                    <button class="filter-tab tab-amber" data-filter="incomplete">Incomplete 🟡 (<span
+                            id="count-incomplete">0</span>)</button>
+                    <button class="filter-tab tab-green" data-filter="success">Successful 🟢 (<span
+                            id="count-success">0</span>)</button>
+                </div>
+                <div class="right-controls">
+                    <div class="search-box">
+                        <input type="text" id="search-input" placeholder="Search by RAN ID, AMF ID, or 5G-S-TMSI...">
+                    </div>
+                    <div class="view-toggle">
+                        <button id="view-btn-list" class="view-btn active" title="Vertical Formal Table/List View">
+                            <span>☰ Vertical Formal List</span>
+                        </button>
+                        <button id="view-btn-grid" class="view-btn" title="Card Grid View">
+                            <span>🔲 Grid Cards</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- UE Context Display Container (Supports Vertical List & Cards) -->
+        <main id="ue-container" class="ue-container list-view">
+            <!-- Rendered dynamically via JS -->
+            <div class="empty-state">
+                <div class="empty-icon">🔍</div>
+                <h3>No Capture Loaded</h3>
+                <p>Upload a 5G PCAP/PCAPNG file above or click "Load Sample Capture" to view interactive diagnostics.
+                </p>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal / Drawer for Timeline & Deep Inspection -->
+    <div id="detail-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2 id="modal-ue-title">UE Context Timeline</h2>
+                    <div id="modal-ue-badges" class="badges-row"></div>
+                </div>
+                <button id="modal-close" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Tabs in modal -->
+                <div class="modal-tabs">
+                    <button class="modal-tab active" data-mtab="timeline">Signalling Sequence Diagram</button>
+                    <button class="modal-tab" data-mtab="procedures">Procedures & Causes</button>
+                    <button class="modal-tab" data-mtab="raw">Raw JSON Context</button>
+                </div>
+
+                <div id="mtab-timeline" class="mtab-content active">
+                    <div id="sequence-diagram" class="sequence-diagram"></div>
+                </div>
+
+                <div id="mtab-procedures" class="mtab-content">
+                    <div id="modal-procedures-list"></div>
+                </div>
+
+                <div id="mtab-raw" class="mtab-content">
+                    <pre id="modal-json-view" class="json-code"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

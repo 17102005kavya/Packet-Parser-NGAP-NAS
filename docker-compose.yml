@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  # Web GUI Dashboard Service
+  ngap-analyzer-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ngap-analyzer:latest
+    container_name: ngap_analyzer_gui
+    ports:
+      - "8080:8080"
+    command: ["python", "main.py", "--gui", "--port", "8080"]
+    restart: unless-stopped
