@@ -480,15 +480,12 @@ function openUEModal(ue) {
 
             item.innerHTML = `
                 <div class="seq-frame">
-                    <span>Frame #${event.frame_number}</span>
-                    <span style="font-size:0.7rem; color:var(--text-dim);">${event.timestamp}s</span>
+                    <span class="frame-num">Frame #${event.frame_number}</span>
+                    <span class="frame-ts">${formatTimestamp(event.timestamp)}</span>
                 </div>
                 <div class="seq-msg-card">
                     <div>
                         <strong>${event.message_type}</strong>
-                        <div class="ip-flow-text">
-                            ${srcIp} ➔ ${dstIp} ${streamInfo}
-                        </div>
                         ${event.cause_code ? `<div style="color:#fca5a5; font-size:0.75rem; margin-top:0.2rem;">Cause: ${event.cause_code}</div>` : ''}
                     </div>
                     <span class="seq-direction ${dirClass}">${event.direction}</span>
@@ -518,4 +515,19 @@ function openUEModal(ue) {
     document.getElementById('modal-json-view').textContent = JSON.stringify(ue, null, 2);
 
     document.getElementById('detail-modal').classList.remove('hidden');
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    const str = String(ts).trim();
+    if (str.includes('T')) {
+        const timePart = str.split('T')[1] || str;
+        return timePart.replace(/(\.\d{3})\d*(Z?)/, '$1$2');
+    }
+    if (str.endsWith('s')) {
+        const num = parseFloat(str.slice(0, -1));
+        return !isNaN(num) ? `${num.toFixed(3)}s` : str;
+    }
+    const num = parseFloat(str);
+    return !isNaN(num) ? `${num.toFixed(3)}s` : str;
 }

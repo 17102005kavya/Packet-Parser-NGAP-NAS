@@ -103,8 +103,11 @@ class HTMLReportGenerator:
         .modal-body {{ padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }}
         .close-btn {{ background: none; border: none; color: var(--text-muted); font-size: 1.8rem; cursor: pointer; }}
         
-        .seq-row {{ display: grid; grid-template-columns: 80px 1fr; gap: 1rem; align-items: center; font-family: var(--font-code); font-size: 0.82rem; padding: 0.4rem 0; }}
-        .seq-msg {{ background: rgba(255,255,255,0.04); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.6rem 0.9rem; display: flex; justify-content: space-between; }}
+        .seq-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 1rem; align-items: center; font-family: var(--font-code); font-size: 0.82rem; padding: 0.4rem 0; }}
+        .seq-frame {{ display: flex; flex-direction: column; gap: 0.2rem; line-height: 1.3; }}
+        .frame-num {{ font-weight: 600; color: var(--text-main); font-size: 0.78rem; white-space: nowrap; }}
+        .frame-ts {{ font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .seq-msg {{ background: rgba(255,255,255,0.04); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.6rem 0.9rem; display: flex; justify-content: space-between; align-items: center; }}
     </style>
 </head>
 <body>
@@ -234,6 +237,21 @@ class HTMLReportGenerator:
             document.getElementById('cnt-inc').textContent = inc;
         }}
 
+        function formatTimestamp(ts) {{
+            if (!ts) return '';
+            const str = String(ts).trim();
+            if (str.includes('T')) {{
+                const timePart = str.split('T')[1] || str;
+                return timePart.replace(/(\\.\\d{{3}})\\d*(Z?)/, '$1$2');
+            }}
+            if (str.endsWith('s')) {{
+                const num = parseFloat(str.slice(0, -1));
+                return !isNaN(num) ? `${{num.toFixed(3)}}s` : str;
+            }}
+            const num = parseFloat(str);
+            return !isNaN(num) ? `${{num.toFixed(3)}}s` : str;
+        }}
+
         function openModal(ue) {{
             document.getElementById('modal-title').textContent = `${{ue.context_id}} Signalling Sequence Flow`;
             const body = document.getElementById('modal-body');
@@ -244,12 +262,14 @@ class HTMLReportGenerator:
                 row.className = 'seq-row';
                 const isGnb = (evt.direction || '').includes('gNB -> AMF');
                 row.innerHTML = `
-                    <div style="color:var(--text-muted); font-size:0.75rem;">Frame #${{evt.frame_number}}</div>
+                    <div class="seq-frame">
+                        <span class="frame-num">Frame #${{evt.frame_number}}</span>
+                        <span class="frame-ts">${{formatTimestamp(evt.timestamp)}}</span>
+                    </div>
                     <div class="seq-msg">
                         <div>
                             <strong>${{evt.message_type}}</strong>
-                            <div style="color:var(--text-muted); font-size:0.75rem;">${{evt.src_ip || 'gNB'}} ➔ ${{evt.dst_ip || 'AMF'}}</div>
-                            ${{evt.cause_code ? `<div style="color:#fca5a5; font-size:0.75rem;">Cause: ${{evt.cause_code}}</div>` : ''}}
+                            ${{evt.cause_code ? `<div style="color:#fca5a5; font-size:0.75rem; margin-top:0.2rem;">Cause: ${{evt.cause_code}}</div>` : ''}}
                         </div>
                         <span style="font-weight:600; color:${{isGnb ? '#a5b4fc' : '#67e8f9'}};">${{evt.direction}}</span>
                     </div>
