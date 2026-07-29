@@ -15,6 +15,14 @@ from .ue_context_analyzer import UEContextAnalyzer
 from .transport_analyzer import TransportAnalyzer
 from .paging_analyzer import PagingAnalyzer
 from .unclassified_collector import UnclassifiedEventCollector
+from .nas_non_delivery_analyzer import NASNonDeliveryAnalyzer
+from .identity_procedure_analyzer import IdentityProcedureAnalyzer
+from .config_update_analyzer import ConfigUpdateAnalyzer
+from .error_indication_analyzer import ErrorIndicationAnalyzer
+from .handover_analyzer import HandoverAnalyzer
+from .path_switch_analyzer import PathSwitchAnalyzer
+from .ran_status_transfer_analyzer import RANStatusTransferAnalyzer
+from .trace_analyzer import TraceAnalyzer
 
 
 class ProcedureAnalysisEngine:
@@ -33,6 +41,14 @@ class ProcedureAnalysisEngine:
         self.transport_analyzer = TransportAnalyzer()
         self.paging_analyzer = PagingAnalyzer()
         self.unclassified_collector = UnclassifiedEventCollector()
+        self.nas_non_delivery_analyzer = NASNonDeliveryAnalyzer()
+        self.identity_procedure_analyzer = IdentityProcedureAnalyzer()
+        self.config_update_analyzer = ConfigUpdateAnalyzer()
+        self.error_indication_analyzer = ErrorIndicationAnalyzer()
+        self.handover_analyzer = HandoverAnalyzer()
+        self.path_switch_analyzer = PathSwitchAnalyzer()
+        self.ran_status_transfer_analyzer = RANStatusTransferAnalyzer()
+        self.trace_analyzer = TraceAnalyzer()
 
     def process(self, ue_contexts: List[UEContext], global_events: List[ProtocolEvent]) -> List[Procedure]:
         """
@@ -44,7 +60,9 @@ class ProcedureAnalysisEngine:
         ng_setup_procs = self.ng_setup_analyzer.analyze(global_events)
         transport_procs = self.transport_analyzer.analyze(global_events)
         global_unclassified = self.unclassified_collector.analyze(global_events)
-        global_procs = ng_setup_procs + transport_procs + global_unclassified
+        global_config_procs = self.config_update_analyzer.analyze(global_events)
+        global_error_procs = self.error_indication_analyzer.analyze(global_events)
+        global_procs = ng_setup_procs + transport_procs + global_unclassified + global_config_procs + global_error_procs
 
         # Process per-UE procedures
         for ue in ue_contexts:
@@ -59,9 +77,21 @@ class ProcedureAnalysisEngine:
             pdu_procs = self.pdu_analyzer.analyze(ue.events)
             ctx_procs = self.ue_context_analyzer.analyze(ue.events)
             paging_procs = self.paging_analyzer.analyze(ue.events)
+            nas_non_deliv_procs = self.nas_non_delivery_analyzer.analyze(ue.events)
+            identity_procs = self.identity_procedure_analyzer.analyze(ue.events)
+            ue_config_procs = self.config_update_analyzer.analyze(ue.events)
+            error_ind_procs = self.error_indication_analyzer.analyze(ue.events)
+            ho_procs = self.handover_analyzer.analyze(ue.events)
+            ps_procs = self.path_switch_analyzer.analyze(ue.events)
+            status_xfer_procs = self.ran_status_transfer_analyzer.analyze(ue.events)
+            trace_procs = self.trace_analyzer.analyze(ue.events)
             ue_unclassified = self.unclassified_collector.analyze(ue.events)
 
-            all_ue_procs = reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + paging_procs + ue_unclassified
+            all_ue_procs = (
+                reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + paging_procs +
+                nas_non_deliv_procs + identity_procs + ue_config_procs + error_ind_procs + ho_procs +
+                ps_procs + status_xfer_procs + trace_procs + ue_unclassified
+            )
             ue.procedures = all_ue_procs
 
             # Populate explicit failures and incomplete summaries
