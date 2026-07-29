@@ -1258,6 +1258,73 @@ class TestExtendedSuite(unittest.TestCase):
             self.assertIsNotNone(parsed)
             self.assertEqual(parsed["message_type"], expected_msg)
 
+    def test_paging_procedures_and_diagnostics(self):
+        """Test complete support for NGAP Paging procedure (answering, timing, unanswered, retransmission, and diagnostics)."""
+        from ngap_analyzer.models import ProtocolEvent, UEContext, ProcedureStatus
+        from ngap_analyzer.procedure_engine.engine import ProcedureAnalysisEngine
+        from ngap_analyzer.diagnostic_engine import DiagnosticEngine
+
+        # Case 1: Answered paging with timing latency analysis
+        evt1 = ProtocolEvent(frame_number=1, timestamp=10.0, timestamp_str="10.0", protocol="NGAP", direction="AMF -> gNB", message_type="Paging", fiveg_s_tmsi="0x123456")
+        evt2 = ProtocolEvent(frame_number=2, timestamp=10.8, timestamp_str="10.8", protocol="NGAP", direction="gNB -> AMF", message_type="Initial UE Message", fiveg_s_tmsi="0x123456", ran_ue_ngap_id=1, amf_ue_ngap_id=10)
+        
+        ue1 = UEContext(context_id="UE_P1", fiveg_s_tmsi="0x123456")
+        ue1.events = [evt1, evt2]
+
+        # Case 2: Unanswered paging (fails)
+        evt3 = ProtocolEvent(frame_number=3, timestamp=20.0, timestamp_str="20.0", protocol="NGAP", direction="AMF -> gNB", message_type="Paging", fiveg_s_tmsi="0x789012")
+        
+        ue2 = UEContext(context_id="UE_P2", fiveg_s_tmsi="0x789012")
+        ue2.events = [evt3]
+
+        # Case 3: Retransmission of paging (multiple page events, single answer, latency timing)
+        evt4 = ProtocolEvent(frame_number=4, timestamp=30.0, timestamp_str="30.0", protocol="NGAP", direction="AMF -> gNB", message_type="Paging", fiveg_s_tmsi="0xabcdef")
+        evt5 = ProtocolEvent(frame_number=5, timestamp=32.0, timestamp_str="32.0", protocol="NGAP", direction="AMF -> gNB", message_type="Paging", fiveg_s_tmsi="0xabcdef")
+        evt6 = ProtocolEvent(frame_number=6, timestamp=33.5, timestamp_str="33.5", protocol="NGAP", direction="gNB -> AMF", message_type="Service Request", fiveg_s_tmsi="0xabcdef", ran_ue_ngap_id=2, amf_ue_ngap_id=20)
+        
+        ue3 = UEContext(context_id="UE_P3", fiveg_s_tmsi="0xabcdef")
+        ue3.events = [evt4, evt5, evt6]
+
+        # Process through Procedure Analysis Engine
+        engine = ProcedureAnalysisEngine()
+        engine.process([ue1, ue2, ue3], [])
+
+        # Assert UE 1 Paging details
+        p1 = [p for p in ue1.procedures if p.name == "Paging"]
+        self.assertEqual(len(p1), 1)
+        self.assertEqual(p1[0].status, ProcedureStatus.COMPLETED)
+        self.assertAlmostEqual(p1[0].end_time - p1[0].start_time, 0.8, places=3)
+        self.assertTrue(any("latency: 0.800s" in obs for obs in p1[0].observations))
+
+        # Assert UE 2 Paging details (Unanswered)
+        p2 = [p for p in ue2.procedures if p.name == "Paging"]
+        self.assertEqual(len(p2), 1)
+        self.assertEqual(p2[0].status, ProcedureStatus.FAILED)
+        self.assertEqual(p2[0].failure_cause, "No Paging Response")
+
+        # Assert UE 3 Paging details (Retransmission)
+        p3 = [p for p in ue3.procedures if p.name == "Paging"]
+        self.assertEqual(len(p3), 1)
+        self.assertEqual(p3[0].status, ProcedureStatus.COMPLETED)
+        self.assertAlmostEqual(p3[0].end_time - p3[0].start_time, 3.5, places=3)
+        self.assertTrue(any("Paging retransmission observed in frame 5" in obs for obs in p3[0].observations))
+
+        # Run Diagnostic Engine
+        diag_engine = DiagnosticEngine()
+        global_obs = diag_engine.evaluate([ue1, ue2, ue3], [], [])
+
+        # Verify global paging observations are populated
+        paging_stats_obs = [o for o in global_obs if o.rule_id == "RULE_GLOBAL_PAGING"]
+        self.assertEqual(len(paging_stats_obs), 1)
+        self.assertTrue(any("Total Paging Requests: 3" in ev for ev in paging_stats_obs[0].evidence))
+        self.assertTrue(any("Answered: 2" in ev for ev in paging_stats_obs[0].evidence))
+        self.assertTrue(any("Unanswered: 1" in ev for ev in paging_stats_obs[0].evidence))
+        self.assertTrue(any("Paging Retransmissions: 1" in ev for ev in paging_stats_obs[0].evidence))
+
+        # Verify UE context specific rules
+        self.assertTrue(any("Unanswered paging event detected" in obs for obs in ue2.observations))
+        self.assertTrue(any("Paging retransmissions detected" in obs for obs in ue3.observations))
+
 
 if __name__ == "__main__":
     unittest.main()
