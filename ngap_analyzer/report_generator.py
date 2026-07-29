@@ -1,19 +1,27 @@
 """
 Report Generator for NGAP / NAS Wireshark Diagnostic Analyzer.
+
 Renders detailed, highly formatted terminal reports and structured JSON exports.
 """
 
 import json
-from typing import Dict, Any, List
-from .models import DiagnosticReport, UEContext, ProcedureStatus, DiagnosticObservation
+from typing import Any, Dict, List
+from .models import DiagnosticObservation, DiagnosticReport, ProcedureStatus, UEContext
 
 
 class ReportGenerator:
-    """
-    Renders detailed console text and JSON diagnostic reports.
-    """
+    """Renders detailed console text and JSON diagnostic reports from DiagnosticReport objects."""
 
     def generate_console_report(self, report: DiagnosticReport) -> str:
+        """
+        Formats a DiagnosticReport instance into a multi-line formatted console text report.
+
+        Args:
+            report: The DiagnosticReport object to render.
+
+        Returns:
+            Formatted plain-text console report string.
+        """
         lines: List[str] = []
 
         lines.append("================================================================================")
@@ -58,7 +66,8 @@ class ReportGenerator:
                 lines.append(" None observed")
             else:
                 for p in ue.procedures:
-                    conf_suffix = " (Inferred)" if getattr(p, "confidence", "DIRECT") == "INFERRED" else ""
+                    conf = getattr(p, "confidence", "DIRECT")
+                    conf_suffix = " (Inferred)" if conf == "INFERRED" else ""
                     if p.name == "Authentication":
                         if p.status == ProcedureStatus.COMPLETED:
                             lines.append(f" Authentication Successful{conf_suffix}")
@@ -123,4 +132,13 @@ class ReportGenerator:
         return "\n".join(lines)
 
     def generate_json_report(self, report: DiagnosticReport) -> str:
+        """
+        Serializes a DiagnosticReport object to a pretty-printed JSON string.
+
+        Args:
+            report: The DiagnosticReport instance to serialize.
+
+        Returns:
+            JSON formatted string representation.
+        """
         return json.dumps(report.to_dict(), indent=2)
