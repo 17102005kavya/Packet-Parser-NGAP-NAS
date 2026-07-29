@@ -150,3 +150,52 @@ class DiagnosticEngine:
                 obs_msg = f"Paging retransmissions detected ({len(paging_requests)} attempts for Request frame {p.events[0].frame_number})."
                 if obs_msg not in ue.observations:
                     ue.observations.append(obs_msg)
+
+        # Rule: Error Indication detected
+        for p in [p for p in ue.procedures if p.name == "Error Indication"]:
+            obs_msg = f"Error Indication detected (cause: {p.failure_cause})."
+            if obs_msg not in ue.observations:
+                ue.observations.append(obs_msg)
+
+        # Rule: Handover failed/cancelled
+        for p in [p for p in ue.procedures if p.name == "Handover"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"Handover failed or cancelled (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+
+        # Rule: Path Switch failed
+        for p in [p for p in ue.procedures if p.name == "Path Switch"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"Path Switch failed (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+
+
+
+        # Rule: Trace Control failed
+        for p in [p for p in ue.procedures if p.name == "Trace Control"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"Trace session failed (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+
+        # Rule: NAS Non-Delivery
+        for p in [p for p in ue.procedures if p.name == "NAS Non-Delivery Indication"]:
+            obs_msg = f"NAS message delivery failure detected (cause: {p.failure_cause})."
+            if obs_msg not in ue.observations:
+                ue.observations.append(obs_msg)
+
+        # Rule: UE Configuration Update failed
+        for p in [p for p in ue.procedures if p.name == "UE Configuration Update"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"UE Configuration Update failed (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+
+        # Rule: Identity Procedure failed
+        for p in [p for p in ue.procedures if p.name == "Identity Procedure"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"Identity verification procedure failed (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)

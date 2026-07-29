@@ -1325,6 +1325,121 @@ class TestExtendedSuite(unittest.TestCase):
         self.assertTrue(any("Unanswered paging event detected" in obs for obs in ue2.observations))
         self.assertTrue(any("Paging retransmissions detected" in obs for obs in ue3.observations))
 
+    def test_comprehensive_procedures_diagnostics(self):
+        """Verify the 8 new procedure analyzers and their diagnostics."""
+        from ngap_analyzer.models import ProtocolEvent, UEContext, ProcedureStatus
+        from ngap_analyzer.procedure_engine.engine import ProcedureAnalysisEngine
+        from ngap_analyzer.diagnostic_engine import DiagnosticEngine
+
+        ue = UEContext(context_id="UE_COMP_1", fiveg_s_tmsi="0x123456")
+        
+        # Timeline events
+        events = [
+            # 1. NAS Non-Delivery / Reroute
+            ProtocolEvent(frame_number=1, timestamp=10.0, timestamp_str="10.0", protocol="NGAP", direction="gNB -> AMF", message_type="NAS Non-Delivery Indication", cause_code="radio-connection-with-ue-lost"),
+            ProtocolEvent(frame_number=2, timestamp=11.0, timestamp_str="11.0", protocol="NGAP", direction="AMF -> gNB", message_type="Reroute NAS Request"),
+            
+            # 2. Identity Procedure
+            ProtocolEvent(frame_number=3, timestamp=12.0, timestamp_str="12.0", protocol="NAS", direction="AMF -> UE", message_type="Identity Request"),
+            ProtocolEvent(frame_number=4, timestamp=12.2, timestamp_str="12.2", protocol="NAS", direction="UE -> AMF", message_type="Identity Response"),
+            
+            # 3. UE Configuration Update
+            ProtocolEvent(frame_number=5, timestamp=13.0, timestamp_str="13.0", protocol="NAS", direction="AMF -> UE", message_type="Configuration Update Command"),
+            ProtocolEvent(frame_number=6, timestamp=13.4, timestamp_str="13.4", protocol="NAS", direction="UE -> AMF", message_type="Configuration Update Complete"),
+
+            # 4. Error Indication with trigger correlation
+            ProtocolEvent(frame_number=7, timestamp=14.0, timestamp_str="14.0", protocol="NGAP", direction="gNB -> AMF", message_type="Initial Context Setup Request"),
+            ProtocolEvent(frame_number=8, timestamp=14.1, timestamp_str="14.1", protocol="NGAP", direction="AMF -> gNB", message_type="Error Indication", cause_code="semantic-error"),
+
+            # 5. Handover lifecycle
+            ProtocolEvent(frame_number=9, timestamp=15.0, timestamp_str="15.0", protocol="NGAP", direction="gNB -> AMF", message_type="Handover Required"),
+            ProtocolEvent(frame_number=10, timestamp=15.3, timestamp_str="15.3", protocol="NGAP", direction="AMF -> gNB", message_type="Handover Command"),
+            ProtocolEvent(frame_number=11, timestamp=15.9, timestamp_str="15.9", protocol="NGAP", direction="gNB -> AMF", message_type="Handover Notify"),
+
+            # 6. Path Switch
+            ProtocolEvent(frame_number=12, timestamp=17.0, timestamp_str="17.0", protocol="NGAP", direction="gNB -> AMF", message_type="Path Switch Request"),
+            ProtocolEvent(frame_number=13, timestamp=17.2, timestamp_str="17.2", protocol="NGAP", direction="AMF -> gNB", message_type="Path Switch Request Acknowledge"),
+
+            # 7. RAN Status Transfer
+            ProtocolEvent(frame_number=14, timestamp=18.0, timestamp_str="18.0", protocol="NGAP", direction="gNB -> AMF", message_type="Uplink RAN Status Transfer"),
+            ProtocolEvent(frame_number=15, timestamp=18.1, timestamp_str="18.1", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink RAN Status Transfer"),
+        ]
+        ue.events = events
+
+        # Also test global events for AMF / RAN config updates
+        global_events = [
+            ProtocolEvent(frame_number=101, timestamp=5.0, timestamp_str="5.0", protocol="NGAP", direction="AMF -> gNB", message_type="AMF Configuration Update"),
+            ProtocolEvent(frame_number=102, timestamp=5.2, timestamp_str="5.2", protocol="NGAP", direction="gNB -> AMF", message_type="AMF Configuration Update Acknowledge"),
+            ProtocolEvent(frame_number=103, timestamp=6.0, timestamp_str="6.0", protocol="NGAP", direction="gNB -> AMF", message_type="RAN Configuration Update"),
+            ProtocolEvent(frame_number=104, timestamp=6.3, timestamp_str="6.3", protocol="NGAP", direction="AMF -> gNB", message_type="RAN Configuration Update Failure", cause_code="unknown-local-ted-id"),
+        ]
+
+        engine = ProcedureAnalysisEngine()
+        global_procs = engine.process([ue], global_events)
+
+        # Check Global procedures (AMF & RAN Config Update)
+        amf_update = [p for p in global_procs if p.name == "AMF Configuration Update"]
+        self.assertEqual(len(amf_update), 1)
+        self.assertEqual(amf_update[0].status, ProcedureStatus.COMPLETED)
+        self.assertAlmostEqual(amf_update[0].end_time - amf_update[0].start_time, 0.2)
+
+        ran_update = [p for p in global_procs if p.name == "RAN Configuration Update"]
+        self.assertEqual(len(ran_update), 1)
+        self.assertEqual(ran_update[0].status, ProcedureStatus.FAILED)
+        self.assertEqual(ran_update[0].failure_cause, "unknown-local-ted-id")
+
+        # Check UE procedures
+        # 1. NAS Non-Delivery / Reroute
+        non_deliv = [p for p in ue.procedures if p.name == "NAS Non-Delivery Indication"]
+        self.assertEqual(len(non_deliv), 1)
+        self.assertEqual(non_deliv[0].status, ProcedureStatus.FAILED)
+        self.assertEqual(non_deliv[0].failure_cause, "radio-connection-with-ue-lost")
+
+        reroute = [p for p in ue.procedures if p.name == "Reroute NAS Request"]
+        self.assertEqual(len(reroute), 1)
+
+        # 2. Identity Procedure
+        ident = [p for p in ue.procedures if p.name == "Identity Procedure"]
+        self.assertEqual(len(ident), 1)
+        self.assertEqual(ident[0].status, ProcedureStatus.COMPLETED)
+
+        # 3. UE Configuration Update
+        ue_conf = [p for p in ue.procedures if p.name == "UE Configuration Update"]
+        self.assertEqual(len(ue_conf), 1)
+        self.assertEqual(ue_conf[0].status, ProcedureStatus.COMPLETED)
+
+        # 4. Error Indication
+        err_ind = [p for p in ue.procedures if p.name == "Error Indication"]
+        self.assertEqual(len(err_ind), 1)
+        self.assertEqual(err_ind[0].status, ProcedureStatus.FAILED)
+        self.assertTrue(any("triggered by preceding message: Initial Context Setup Request" in obs for obs in err_ind[0].observations))
+
+        # 5. Handover
+        ho = [p for p in ue.procedures if p.name == "Handover"]
+        self.assertEqual(len(ho), 1)
+        self.assertEqual(ho[0].status, ProcedureStatus.COMPLETED)
+
+        # 6. Path Switch
+        ps = [p for p in ue.procedures if p.name == "Path Switch"]
+        self.assertEqual(len(ps), 1)
+        self.assertEqual(ps[0].status, ProcedureStatus.COMPLETED)
+
+        # 7. RAN Status Transfer
+        ul_xfer = [p for p in ue.procedures if p.name == "Uplink RAN Status Transfer"]
+        self.assertEqual(len(ul_xfer), 1)
+        dl_xfer = [p for p in ue.procedures if p.name == "Downlink RAN Status Transfer"]
+        self.assertEqual(len(dl_xfer), 1)
+
+
+
+        # Run Diagnostics
+        diag_engine = DiagnosticEngine()
+        diag_engine.evaluate([ue], global_procs, global_events)
+
+        # Assert UE diagnostic observations
+        self.assertTrue(any("NAS message delivery failure detected" in obs for obs in ue.observations))
+        self.assertTrue(any("Error Indication detected" in obs for obs in ue.observations))
+
 
 if __name__ == "__main__":
     unittest.main()
