@@ -1,17 +1,19 @@
 """
 Packet Reader module for NGAP / NAS Wireshark Diagnostic Analyzer.
-Supports PyShark FileCapture, tshark -T json subprocess output parsing,
-and synthetic packet loading for standalone execution/testing.
+
+Supports reading packet captures via tshark JSON subprocess output, PyShark FileCapture,
+or direct loading of pre-parsed synthetic packet structures for testing and analysis.
 """
 
 import json
 import logging
-import os
 import shutil
 import subprocess
-from typing import Dict, Any, Generator, List, Optional
+from typing import Any, Dict, Generator, Optional
 
 logger = logging.getLogger(__name__)
+
+TSHARK_DISPLAY_FILTER: str = "ngap || nas-5gs || sctp"
 
 
 class PacketReader:
@@ -20,18 +22,29 @@ class PacketReader:
     or pre-loaded packet dictionaries.
     """
 
-    def __init__(self, use_pyshark: bool = False):
+    def __init__(self, use_pyshark: bool = False) -> None:
+        """
+        Initializes PacketReader.
+
+        Args:
+            use_pyshark: If True, uses PyShark binding instead of tshark JSON subprocess.
+        """
         self.use_pyshark = use_pyshark
         self.malformed_count = 0
 
     @staticmethod
     def is_tshark_available() -> bool:
+        """Checks if the tshark binary is accessible in system executable PATH."""
         return shutil.which("tshark") is not None
 
     def read_packets(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """
         Reads packet structures from file_path.
+
         Yields normalized packet dictionary representations containing frame metadata and decoded layers.
+
+        Args:
+            file_path: Path to capture file (.pcap, .pcapng, or exported .json).
         """
         self.malformed_count = 0
 
@@ -56,6 +69,7 @@ class PacketReader:
             )
 
     def _read_from_json_file(self, json_path: str) -> Generator[Dict[str, Any], None, None]:
+        """Reads packet structures directly from a JSON capture export file."""
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
@@ -65,11 +79,12 @@ class PacketReader:
                 yield data
 
     def _read_with_tshark_json(self, pcap_path: str) -> Generator[Dict[str, Any], None, None]:
+        """Invokes tshark CLI subprocess to decode pcap file to JSON structures."""
         cmd = [
             "tshark",
             "-r", pcap_path,
             "-T", "json",
-            "-Y", "ngap || nas-5gs || sctp"
+            "-Y", TSHARK_DISPLAY_FILTER,
         ]
         try:
             process = subprocess.Popen(
@@ -78,7 +93,7 @@ class PacketReader:
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
-                errors="replace"
+                errors="replace",
             )
             stdout, stderr = process.communicate()
             if process.returncode != 0 and not stdout:
@@ -94,12 +109,13 @@ class PacketReader:
             raise
 
     def _read_with_pyshark(self, pcap_path: str) -> Generator[Dict[str, Any], None, None]:
+        """Reads packet frames using PyShark library bindings."""
         import pyshark  # type: ignore
 
         capture = pyshark.FileCapture(
             pcap_path,
-            display_filter="ngap || nas-5gs || sctp",
-            keep_packets=False
+            display_filter=TSHARK_DISPLAY_FILTER,
+            keep_packets=False,
         )
         for pkt in capture:
             try:
@@ -110,7 +126,8 @@ class PacketReader:
                 logger.debug(f"Skipping malformed pyshark packet: {e}")
         capture.close()
 
-    def _pyshark_pkt_to_dict(self, pkt) -> Dict[str, Any]:
+    def _pyshark_pkt_to_dict(self, pkt: Any) -> Dict[str, Any]:
+        """Translates PyShark packet object properties into normalized dictionary structure."""
         layers = {}
         for layer in pkt.layers:
             layer_name = layer.layer_name.lower()
@@ -123,8 +140,8 @@ class PacketReader:
             layers[layer_name] = layer_dict
 
         frame_num = int(pkt.number)
-        time_epoch = float(pkt.sniff_timestamp) if hasattr(pkt, 'sniff_timestamp') else 0.0
-        time_str = str(pkt.sniff_time) if hasattr(pkt, 'sniff_time') else ""
+        time_epoch = float(pkt.sniff_timestamp) if hasattr(pkt, "sniff_timestamp") else 0.0
+        time_str = str(pkt.sniff_time) if hasattr(pkt, "sniff_time") else ""
 
         return {
             "_source": {
@@ -132,9 +149,9 @@ class PacketReader:
                     "frame": {
                         "frame.number": [str(frame_num)],
                         "frame.time_epoch": [str(time_epoch)],
-                        "frame.time": [time_str]
+                        "frame.time": [time_str],
                     },
-                    **layers
+                    **layers,
                 }
             }
         }

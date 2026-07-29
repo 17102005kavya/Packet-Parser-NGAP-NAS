@@ -1,21 +1,29 @@
 """
 Command-Line Interface for NGAP / NAS Wireshark Diagnostic Analyzer.
+
+Provides CLI entry points for parsing 5G Core packet captures, executing diagnostic
+evaluations, exporting JSON/HTML reports, or launching the web GUI dashboard.
 """
 
 import argparse
 import logging
+import os
 import sys
-from typing import Optional, List
+from typing import List, Optional
 
-from .packet_reader import PacketReader
-from .packet_parser import PacketParser
-from .event_extractor import EventExtractor
-from .ue_context_manager import UEContextManager
-from .procedure_engine.engine import ProcedureAnalysisEngine
 from .diagnostic_engine import DiagnosticEngine
-from .report_generator import ReportGenerator
+from .event_extractor import EventExtractor
 from .html_report_generator import HTMLReportGenerator
 from .models import DiagnosticReport
+from .packet_parser import PacketParser
+from .packet_reader import PacketReader
+from .procedure_engine.engine import ProcedureAnalysisEngine
+from .report_generator import ReportGenerator
+from .ue_context_manager import UEContextManager
+
+DEFAULT_WEB_PORT: int = 8080
+PROCEDURE_NG_SETUP: str = "NG Setup"
+PROTOCOL_SCTP: str = "SCTP"
 
 
 def run_analyzer(
@@ -23,10 +31,20 @@ def run_analyzer(
     use_pyshark: bool = False,
     output_json: bool = False,
     output_html: bool = False,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
 ) -> str:
     """
     Executes the full NGAP/NAS analysis pipeline on file_path and returns the formatted report string.
+
+    Args:
+        file_path: Path to input PCAP/PCAPNG or pre-parsed JSON capture file.
+        use_pyshark: Whether to force PyShark engine instead of tshark JSON.
+        output_json: Whether to format output as structured JSON.
+        output_html: Whether to format output as standalone HTML dashboard.
+        output_path: Optional output file path to write results.
+
+    Returns:
+        Formatted report string (Console text, JSON, or HTML).
     """
     reader = PacketReader(use_pyshark=use_pyshark)
     parser = PacketParser()
@@ -64,10 +82,12 @@ def run_analyzer(
         pcap_file=file_path,
         total_frames_analyzed=total_frames,
         malformed_frames_skipped=malformed_count,
-        ng_setup_procedures=[p for p in global_procs if p.name == "NG Setup"],
-        sctp_events=[e for e in global_events if "SCTP" in e.protocol or "SCTP" in e.message_type],
+        ng_setup_procedures=[p for p in global_procs if p.name == PROCEDURE_NG_SETUP],
+        sctp_events=[
+            e for e in global_events if PROTOCOL_SCTP in e.protocol or PROTOCOL_SCTP in e.message_type
+        ],
         ue_contexts=ue_contexts,
-        diagnostic_observations=diag_observations
+        diagnostic_observations=diag_observations,
     )
 
     if output_html:
@@ -84,9 +104,18 @@ def run_analyzer(
     return formatted_output
 
 
-def main(args_list: Optional[List[str]] = None):
+def main(args_list: Optional[List[str]] = None) -> None:
+    """
+    Main entry point for command-line execution.
+
+    Args:
+        args_list: Optional list of argument strings for testing programmatic invocation.
+    """
     parser = argparse.ArgumentParser(
-        description="NGAP / NAS Wireshark Diagnostic Analyzer - Parse 5G Core captures, reconstruct procedures, and diagnose failures."
+        description=(
+            "NGAP / NAS Wireshark Diagnostic Analyzer - "
+            "Parse 5G Core captures, reconstruct procedures, and diagnose failures."
+        )
     )
     parser.add_argument(
         "-f", "--file", help="Path to PCAP/PCAPNG or exported tshark JSON capture file."
@@ -95,7 +124,10 @@ def main(args_list: Optional[List[str]] = None):
         "-g", "--gui", action="store_true", help="Launch interactive Web GUI dashboard."
     )
     parser.add_argument(
-        "--port", type=int, default=8080, help="Port for Web GUI server (default: 8080)."
+        "--port",
+        type=int,
+        default=DEFAULT_WEB_PORT,
+        help=f"Port for Web GUI server (default: {DEFAULT_WEB_PORT}).",
     )
     parser.add_argument(
         "-o", "--output", help="Optional output file path to write results."
@@ -104,10 +136,14 @@ def main(args_list: Optional[List[str]] = None):
         "--json", action="store_true", help="Export report as structured JSON."
     )
     parser.add_argument(
-        "--html", action="store_true", help="Export report as interactive standalone HTML dashboard."
+        "--html",
+        action="store_true",
+        help="Export report as interactive standalone HTML dashboard.",
     )
     parser.add_argument(
-        "--pyshark", action="store_true", help="Force using PyShark decoder instead of tshark JSON subprocess."
+        "--pyshark",
+        action="store_true",
+        help="Force using PyShark decoder instead of tshark JSON subprocess.",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose debug logging."
@@ -116,18 +152,16 @@ def main(args_list: Optional[List[str]] = None):
     args = parser.parse_args(args_list)
 
     if args.gui:
-        import os
         from server import start_server
+
         start_server(port=args.port)
         return
 
     if not args.file:
         parser.error("The --file / -f argument is required unless running in --gui mode.")
 
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
-    else:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
 
     try:
         report_text = run_analyzer(
@@ -135,7 +169,7 @@ def main(args_list: Optional[List[str]] = None):
             use_pyshark=args.pyshark,
             output_json=args.json,
             output_html=args.html,
-            output_path=args.output
+            output_path=args.output,
         )
         if args.output:
             print(f"[+] Diagnostic report successfully written to: {args.output}")
