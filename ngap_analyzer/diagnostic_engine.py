@@ -199,3 +199,26 @@ class DiagnosticEngine:
                 obs_msg = f"Identity verification procedure failed (cause: {p.failure_cause})."
                 if obs_msg not in ue.observations:
                     ue.observations.append(obs_msg)
+
+        # Rule: NRPPa Transport failed/incomplete
+        for p in [p for p in ue.procedures if p.name == "UE Associated NRPPa Transport"]:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"NRPPa Transport failed (cause: {p.failure_cause})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+
+        # Rule: Generic timeouts detected
+        for p in ue.procedures:
+            for obs in p.observations:
+                if "Timeout warning" in obs:
+                    obs_msg = f"Timeout warning in procedure {p.name}."
+                    if obs_msg not in ue.observations:
+                        ue.observations.append(obs_msg)
+
+        # Rule: Protocol retransmissions detected
+        for p in ue.procedures:
+            for obs in p.observations:
+                if "Protocol retransmission" in obs:
+                    obs_msg = f"Protocol retransmissions observed in {p.name} procedure."
+                    if obs_msg not in ue.observations:
+                        ue.observations.append(obs_msg)
