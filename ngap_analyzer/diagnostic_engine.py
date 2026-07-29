@@ -72,6 +72,13 @@ class DiagnosticEngine:
             if obs_msg not in ue.observations:
                 ue.observations.append(obs_msg)
 
+        # Rule: Service Request rejected by AMF
+        service_failed = any(p.name == "Service Request" and p.status == ProcedureStatus.FAILED for p in ue.procedures)
+        if service_failed:
+            obs_msg = "Service Request rejected by AMF."
+            if obs_msg not in ue.observations:
+                ue.observations.append(obs_msg)
+
         # Rule: Incomplete procedure with no explicit failure
         incomplete_procs = [p for p in ue.procedures if p.status == ProcedureStatus.INCOMPLETE]
         if incomplete_procs and not ue.explicit_failures:

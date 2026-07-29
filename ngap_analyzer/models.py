@@ -74,6 +74,7 @@ class Procedure:
     last_observed_msg: Optional[str] = None
     expected_next_msg: Optional[str] = None
     failure_cause: Optional[str] = None
+    confidence: str = "DIRECT"  # "DIRECT", "INFERRED", "PARTIAL", "UNKNOWN"
     evidence: List[str] = field(default_factory=list)
     observations: List[str] = field(default_factory=list)
 
@@ -81,6 +82,7 @@ class Procedure:
         return {
             "name": self.name,
             "status": self.status.value,
+            "confidence": self.confidence,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "last_observed_msg": self.last_observed_msg,
@@ -135,6 +137,18 @@ class UEContext:
             self.fiveg_s_tmsi = tmsi
 
     def to_dict(self) -> Dict[str, Any]:
+        event_status_map = {}
+        for p in self.procedures:
+            for pe in p.events:
+                if event_status_map.get(pe.frame_number) != ProcedureStatus.FAILED:
+                    event_status_map[pe.frame_number] = p.status.value
+
+        timeline_dicts = []
+        for e in self.events:
+            d = e.to_dict()
+            d["procedure_status"] = event_status_map.get(e.frame_number)
+            timeline_dicts.append(d)
+
         return {
             "context_id": self.context_id,
             "ran_ue_ngap_id": self.ran_ue_ngap_id,
@@ -146,7 +160,7 @@ class UEContext:
             "explicit_failures": self.explicit_failures,
             "incomplete_procedures": self.incomplete_procedures,
             "diagnostic_observations": self.observations,
-            "timeline": [e.to_dict() for e in self.events]
+            "timeline": timeline_dicts
         }
 
 

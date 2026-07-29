@@ -12,23 +12,270 @@ logger = logging.getLogger(__name__)
 
 
 class PacketParser:
-    """
-    Parses low-level tshark JSON layer structures and normalizes NGAP, NAS, and SCTP fields.
-    """
-    NGAP_PROCEDURES = {
-        4: "downlinkNASTransport",
-        9: "errorIndication",
-        14: "initialContextSetup",
-        15: "initialUEMessage",
-        21: "ngSetup",
-        20: "ngReset",
-        28: "pduSessionResourceRelease",
-        29: "pduSessionResourceSetup",
-        41: "uEContextRelease",
-        42: "uEContextReleaseRequest",
-        46: "uplinkNASTransport",
-    }
+    # Runtime procedure code discovery cache (Procedure Code -> Procedure Name)
+    NGAP_PROCEDURE_CODES: Dict[int, str] = {}
 
+    @staticmethod
+    def _format_procedure_name(name: str) -> str:
+        """
+        Formats raw camelCase/PascalCase procedure names or 3GPP IDs to Title Case.
+        e.g. 'uERadioCapabilityInfoIndication' -> 'UE Radio Capability Info Indication'
+             'id-InitialContextSetup' -> 'Initial Context Setup'
+        """
+        if not name or not isinstance(name, str):
+            return ""
+        s = name.strip()
+        if s.startswith("id-"):
+            s = s[3:]
+
+        # Handle leading uE / nG / pDU acronyms
+        if s.startswith("uE"):
+            s = "UE" + s[2:]
+        elif s.startswith("nG"):
+            s = "NG" + s[2:]
+        elif s.startswith("pDU"):
+            s = "PDU" + s[3:]
+
+        # Insert spaces before capital letters in camelCase
+        s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', s)
+        s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', s)
+
+        # Fix 3GPP acronym spacing
+        s = re.sub(r'\b[uU]\s+[eE]\b', 'UE', s)
+        s = re.sub(r'\b[nN]\s+[gG]\b', 'NG', s)
+        s = re.sub(r'\b[pP]\s+[dD]\s+[uU]\b', 'PDU', s)
+        s = re.sub(r'\b[aA]\s+[mM]\s+[fF]\b', 'AMF', s)
+        s = re.sub(r'\b[rR]\s+[aA]\s+[nN]\b', 'RAN', s)
+        s = re.sub(r'\bPDU\s+Resource\b', 'PDU Session Resource', s)
+        return s.strip()
+
+    def _find_key_recursive(self, data: Any, suffix: str) -> Optional[Tuple[str, Any]]:
+        """
+        Recursively searches for a key ending with suffix in a nested dict/list.
+        Returns (matched_key, value) or None.
+        """
+        suffix_lower = suffix.lower()
+        if isinstance(data, dict):
+            # Check immediate keys first to be breadth-first/top-level first
+            for k, v in data.items():
+                if k.lower().endswith(suffix_lower):
+                    return k, v
+            # If not found at this level, recurse into values
+            for k, v in data.items():
+                res = self._find_key_recursive(v, suffix)
+                if res is not None:
+                    return res
+        elif isinstance(data, list):
+            for item in data:
+                res = self._find_key_recursive(item, suffix)
+                if res is not None:
+                    return res
+        return None
+
+    def _find_first_child_ending_with(self, data: Any, suffix: str) -> Optional[str]:
+        """
+        Finds the first key ending with suffix at the top level of data (or if data is a list,
+        at the top level of the items in data).
+        """
+        suffix_lower = suffix.lower()
+        if isinstance(data, dict):
+            for k in data.keys():
+                if k.lower().endswith(suffix_lower):
+                    return k
+        elif isinstance(data, list):
+            for item in data:
+                res = self._find_first_child_ending_with(item, suffix)
+                if res is not None:
+                    return res
+        return None
+
+    def _discover_procedure_name_from_tree(self, ngap_layer: Dict[str, Any]) -> Optional[str]:
+        """
+        Dynamically discovers the procedure name from the NGAP_PDU_tree JSON structure.
+        """
+        pdu_tree_match = self._find_key_recursive(ngap_layer, "NGAP_PDU_tree")
+        if not pdu_tree_match:
+            pdu_tree = ngap_layer
+        else:
+            pdu_tree = pdu_tree_match[1]
+
+        pdu_types = [
+            "initiatingMessage_element",
+            "successfulOutcome_element",
+            "unsuccessfulOutcome_element",
+            "initiatingMessage",
+            "successfulOutcome",
+            "unsuccessfulOutcome"
+        ]
+        pdu_type_match = None
+        for pdu_type in pdu_types:
+            pdu_type_match = self._find_key_recursive(pdu_tree, pdu_type)
+            if pdu_type_match is not None:
+                break
+
+        if not pdu_type_match:
+            return None
+
+        matched_key, pdu_value = pdu_type_match
+        matched_key_lower = matched_key.lower()
+
+        if "initiatingmessage" in matched_key_lower:
+            prefix = "initiatingMessage"
+        elif "successfuloutcome" in matched_key_lower:
+            prefix = "successfulOutcome"
+        elif "unsuccessfuloutcome" in matched_key_lower:
+            prefix = "unsuccessfulOutcome"
+        else:
+            return None
+
+        val_suffixes = [
+            f"{prefix}value_element",
+            f"{prefix}_value_element",
+            f"{prefix}value",
+            f"{prefix}_value",
+            "value_element",
+            "value"
+        ]
+        val_el_match = None
+        for val_suffix in val_suffixes:
+            val_el_match = self._find_key_recursive(pdu_value, val_suffix)
+            if val_el_match is not None:
+                break
+
+        if not val_el_match:
+            return None
+
+        _, val_el_value = val_el_match
+
+        proc_el_key = self._find_first_child_ending_with(val_el_value, "_element")
+        if proc_el_key is None:
+            recursive_res = self._find_key_recursive(val_el_value, "_element")
+            if recursive_res is not None:
+                proc_el_key = recursive_res[0]
+
+        # Fallback to first non-helper key if no key ending with "_element" is found
+        if proc_el_key is None and isinstance(val_el_value, dict):
+            for k in val_el_value.keys():
+                k_clean = k.split(".")[-1].lower()
+                if not any(x in k_clean for x in ["per", "criticality", "procedurecode", "value"]):
+                    proc_el_key = k
+                    break
+
+        if not proc_el_key:
+            return None
+
+        proc_name_raw = proc_el_key
+        if proc_name_raw.lower().startswith("ngap."):
+            proc_name_raw = proc_name_raw[5:]
+        elif "." in proc_name_raw:
+            proc_name_raw = proc_name_raw.split(".", 1)[1]
+
+        if proc_name_raw.lower().endswith("_element"):
+            proc_name_raw = proc_name_raw[:-8]
+
+        # Strip message suffixes to extract base procedure name (e.g. Command, Complete, Response)
+        suffixes_to_strip = ["command", "complete", "response", "failure", "acknowledge", "unsuccessful"]
+        for suffix in suffixes_to_strip:
+            if proc_name_raw.lower().endswith(suffix):
+                proc_name_raw = proc_name_raw[:-len(suffix)]
+                break
+
+        return self._format_procedure_name(proc_name_raw)
+
+    def _discover_procedure_code(self, ngap_layer: Dict[str, Any], procedure_code: int) -> None:
+        """
+        Dynamically discovers and caches Procedure Code -> Procedure Name mappings
+        directly from the Wireshark/tshark JSON layer structure without hardcoding.
+        """
+        if procedure_code in self.NGAP_PROCEDURE_CODES:
+            return
+
+        # Attempt discovery via NGAP_PDU_tree first
+        discovered_name = self._discover_procedure_name_from_tree(ngap_layer)
+        if discovered_name:
+            self.NGAP_PROCEDURE_CODES[procedure_code] = discovered_name
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Discovered NGAP Procedure via PDU tree: {procedure_code} -> {discovered_name}")
+            return
+
+        proc_name = self._extract_str(
+            ngap_layer,
+            [
+                "ngap.elementaryProcedure",
+                "elementaryProcedure",
+                "ngap.procedureCode_element",
+                "ngap.procedureCode_tree.ngap.procedureCode",
+                "ngap.procedureCode_tree",
+                "procedureCode_tree",
+            ]
+        )
+
+        if proc_name and isinstance(proc_name, str):
+            clean_name = self._format_procedure_name(proc_name.split("(")[0].strip())
+            if clean_name:
+                self.NGAP_PROCEDURE_CODES[procedure_code] = clean_name
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Discovered NGAP Procedure: {procedure_code} -> {clean_name}")
+
+    # NGAP Procedure Code -> Procedure Name (3GPP TS 38.413 Table 9.3.8)
+    # NOTE: This table is a FALLBACK only. Dynamic discovery from NGAP_PDU_tree
+    # is preferred whenever it succeeds to handle future 3GPP additions and version drift.
+    # Extend this table only if a capture surfaces a code with no discoverable name AND no entry here.
+    NGAP_PROCEDURES = {
+        0: "AMF Configuration Update",
+        1: "AMF Status Indication",
+        2: "Cell Traffic Trace",
+        3: "Deactivate Trace",
+        4: "Downlink NAS Transport",
+        5: "Downlink Non-UE Associated NRPPa Transport",
+        6: "Downlink RAN Configuration Transfer",
+        7: "Downlink RAN Status Transfer",
+        8: "Downlink UE Associated NRPPa Transport",
+        9: "Error Indication",
+        10: "Handover Cancel",
+        11: "Handover Notification",
+        12: "Handover Preparation",
+        13: "Handover Resource Allocation",
+        14: "Initial Context Setup",
+        15: "Initial UE Message",
+        16: "Location Reporting Control",
+        17: "Location Reporting Failure Indication",
+        18: "Location Report",
+        19: "NAS Non-Delivery Indication",
+        20: "NG Reset",
+        21: "NG Setup",
+        22: "Overload Start",
+        23: "Overload Stop",
+        24: "Paging",
+        25: "Path Switch Request",
+        26: "PDU Session Resource Modify",
+        27: "PDU Session Resource Modify Indication",
+        28: "PDU Session Resource Release",
+        29: "PDU Session Resource Setup",
+        30: "PDU Session Resource Notify",
+        31: "Private Message",
+        32: "PWS Cancel",
+        33: "PWS Failure Indication",
+        34: "PWS Restart Indication",
+        35: "RAN Configuration Update",
+        36: "Reroute NAS Request",
+        37: "RRC Inactive Transition Report",
+        38: "Trace Failure Indication",
+        39: "Trace Start",
+        40: "UE Context Modification",
+        41: "UE Context Release",
+        42: "UE Context Release Request",
+        43: "UE Radio Capability Check",
+        44: "UE Radio Capability Info Indication",
+        45: "UE TNLA Binding Release",
+        46: "Uplink NAS Transport",
+        47: "Uplink Non-UE Associated NRPPa Transport",
+        48: "Uplink RAN Configuration Transfer",
+        49: "Uplink RAN Status Transfer",
+        50: "Uplink UE Associated NRPPa Transport",
+        51: "Write Replace Warning",
+        52: "Secondary RAT Data Usage Report",
+    }
     def parse_packet(self, packet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Parses a raw packet dictionary into a normalized dictionary of extracted fields.
@@ -48,6 +295,14 @@ class PacketParser:
             sctp_layer = layers.get("sctp")
             ngap_layer = layers.get("ngap")
             nas_layer = layers.get("nas-5gs") or layers.get("nas_5gs") or layers.get("gsm_a.dtap")
+            if not nas_layer and layers:
+                nas_match = (
+                    self._find_key_recursive(layers, "nas-5gs") or
+                    self._find_key_recursive(layers, "nas_5gs") or
+                    self._find_key_recursive(layers, "gsm_a.dtap")
+                )
+                if nas_match:
+                    nas_layer = nas_match[1]
 
             if not ngap_layer and not sctp_layer and not nas_layer:
                 return None
@@ -227,7 +482,22 @@ class PacketParser:
         nas_layer: Optional[Dict[str, Any]],
         sctp_layer: Optional[Dict[str, Any]]
      ) -> Tuple[Optional[str], Optional[int]]:
-        procedure_code = self._extract_int(ngap_layer, ["ngap.procedureCode", "procedureCode"])
+        procedure_code = self._extract_int(
+            ngap_layer,
+            [
+                "ngap.procedureCode",
+                "procedureCode",
+                "ngap.procedurecode",
+                "procedurecode",
+                "ngap.procedureCode_element",
+                "ngap.procedureCode_tree.ngap.procedureCode",
+                "ngap.procedureCode_tree",
+                "procedureCode_tree"
+            ]
+        )
+
+        if ngap_layer and procedure_code is not None:
+            self._discover_procedure_code(ngap_layer, procedure_code)
 
         # Check NAS Message Type first if present
         nas_msg_type = self._extract_str(nas_layer, [
@@ -269,14 +539,56 @@ class PacketParser:
             if pdu_type in _NUMERIC_PDU_TYPE:
                 pdu_type = _NUMERIC_PDU_TYPE[pdu_type]
 
+            # Discover from tree if possible to cache for procedure_code
+            discovered_name = self._discover_procedure_name_from_tree(ngap_layer)
+            if discovered_name and procedure_code is not None:
+                self.NGAP_PROCEDURE_CODES[procedure_code] = discovered_name
+
             elem_proc = self._extract_str(
                 ngap_layer,
                 ["ngap.elementaryProcedure", "elementaryProcedure"]
             )
 
-            # If tshark didn't expose elementaryProcedure, infer it from procedureCode
-            if not elem_proc and procedure_code is not None:
-                elem_proc = self.NGAP_PROCEDURES.get(procedure_code)
+            # If tshark didn't expose elementaryProcedure, infer it from cached or static procedureCode mappings
+            if not elem_proc:
+                candidate_proc = (
+                    discovered_name or
+                    (self.NGAP_PROCEDURE_CODES.get(procedure_code) if procedure_code is not None else None) or
+                    (self.NGAP_PROCEDURES.get(procedure_code) if procedure_code is not None else None)
+                )
+                if candidate_proc:
+                    _HARDCODED_CAMELCASE_MAPPING = {
+                        "Initial UE Message": "initialUEMessage",
+                        "NG Setup": "ngSetup",
+                        "NG Setup Request": "ngSetup",
+                        "NG Setup Response": "ngSetup",
+                        "NG Setup Failure": "ngSetup",
+                        "Downlink NAS Transport": "downlinkNASTransport",
+                        "Uplink NAS Transport": "uplinkNASTransport",
+                        "PDU Session Resource Setup": "pduSessionResourceSetup",
+                        "PDU Session Resource Setup Request": "pduSessionResourceSetup",
+                        "PDU Session Resource Setup Response": "pduSessionResourceSetup",
+                        "PDU Session Resource Setup Unsuccessful": "pduSessionResourceSetup",
+                        "PDU Session Resource Release": "pduSessionResourceRelease",
+                        "PDU Session Resource Release Command": "pduSessionResourceRelease",
+                        "PDU Session Resource Release Response": "pduSessionResourceRelease",
+                        "Initial Context Setup": "initialContextSetup",
+                        "Initial Context Setup Request": "initialContextSetup",
+                        "Initial Context Setup Response": "initialContextSetup",
+                        "Initial Context Setup Failure": "initialContextSetup",
+                        "UE Context Release": "uEContextRelease",
+                        "UE Context Release Command": "uEContextRelease",
+                        "UE Context Release Response": "uEContextRelease",
+                        "UE Context Release Request": "uEContextReleaseRequest",
+                        "Error Indication": "errorIndication",
+                        "NG Reset": "ngReset",
+                        "NG Reset Acknowledge": "ngReset",
+                    }
+                    if candidate_proc in _HARDCODED_CAMELCASE_MAPPING:
+                        elem_proc = _HARDCODED_CAMELCASE_MAPPING[candidate_proc]
+                    else:
+                        # Skip the elif classification chain entirely and go straight to returning the Title Case name
+                        return self._format_procedure_name(candidate_proc), procedure_code
 
             # --- NOTE on substring check order (Bug fix) ---
             # "successfulOutcome" is a strict substring of "unsuccessfulOutcome".
@@ -339,6 +651,11 @@ class PacketParser:
                     return "NG Reset Acknowledge", procedure_code
                 return "NG Reset", procedure_code
 
+            # Fallback for unclassified NGAP procedures using discovered or formatted name
+            discovered = self.NGAP_PROCEDURE_CODES.get(procedure_code) if procedure_code is not None else None
+            fallback_proc = elem_proc or discovered or ngap_msg_type
+            if fallback_proc:
+                return self._format_procedure_name(fallback_proc), procedure_code
 
         # Check SCTP layer
         if sctp_layer:
@@ -363,8 +680,12 @@ class PacketParser:
             return "Registration Complete"
         if "registration reject" in msg_lower or msg_lower in ["0x44", "68"]:
             return "Registration Reject"
+        if "control plane service request" in msg_lower or msg_lower in ["0x4f", "79"]:
+            return "Control Plane Service Request"
         if "service request" in msg_lower or msg_lower in ["0x4c", "76"]:
             return "Service Request"
+        if "service accept" in msg_lower or msg_lower in ["0x4e", "78"]:
+            return "Service Accept"
         if "service reject" in msg_lower or msg_lower in ["0x4d", "77"]:
             return "Service Reject"
         if "authentication request" in msg_lower or msg_lower in ["0x56", "86"]:
@@ -407,14 +728,15 @@ class PacketParser:
             "initial ue message", "uplink nas transport", "ng setup request",
             "registration request", "authentication response", "authentication failure",
             "security mode complete", "security mode reject", "pdu session establishment request",
-            "ue context release request"
+            "ue context release request", "service request", "control plane service request"
         ]
         amf_to_gnb_msgs = [
             "downlink nas transport", "ng setup response", "ng setup failure",
             "initial context setup request", "ue context release command",
             "registration accept", "registration reject", "authentication request",
             "authentication reject", "security mode command",
-            "pdu session establishment accept", "pdu session establishment reject"
+            "pdu session establishment accept", "pdu session establishment reject",
+            "service accept", "service reject"
         ]
 
         for m in gnb_to_amf_msgs:

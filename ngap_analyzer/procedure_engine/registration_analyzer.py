@@ -27,7 +27,18 @@ class RegistrationAnalyzer:
             if msg in ["Registration Request", "Initial UE Message"]:
                 if current_proc is not None:
                     if current_proc.status == ProcedureStatus.INCOMPLETE:
-                        current_proc.observations.append("Registration incomplete (superseded by a new Request).")
+                        if self._can_infer_completion(current_proc, events):
+                            current_proc.status = ProcedureStatus.COMPLETED
+                            current_proc.confidence = "INFERRED"
+                            current_proc.expected_next_msg = None
+                            current_proc.evidence.append(
+                                "Completion inferred from subsequent active UE protocol evidence without failure."
+                            )
+                            current_proc.observations.append(
+                                "Registration COMPLETED (inferred from subsequent active UE protocol activity before new Registration Request)."
+                            )
+                        else:
+                            current_proc.observations.append("Registration incomplete (superseded by a new Request).")
                     procedures.append(current_proc)
                     current_proc = None
 
@@ -92,11 +103,25 @@ class RegistrationAnalyzer:
                 # Accept seen but no Complete — still COMPLETED since Complete is
                 # optional for mobility/periodic registration updates.
                 current_proc.expected_next_msg = None
+                current_proc.confidence = "DIRECT"
                 current_proc.observations.append(
                     "Registration Accept observed without Registration Complete "
                     "(normal for mobility/periodic registration updates)."
                 )
+            elif self._can_infer_completion(current_proc, events):
+                current_proc.status = ProcedureStatus.COMPLETED
+                current_proc.confidence = "INFERRED"
+                current_proc.end_time = events[-1].timestamp
+                current_proc.expected_next_msg = None
+                current_proc.evidence.append(
+                    "Completion inferred from subsequent active UE protocol evidence without failure."
+                )
+                current_proc.observations.append(
+                    "Registration COMPLETED (inferred: explicit NAS accept unavailable/ciphered, "
+                    "but subsequent Initial Context Setup / PDU Session / UE Context activity succeeded)."
+                )
             else:
+                current_proc.confidence = "PARTIAL"
                 current_proc.evidence.append(
                     f"Capture ended after frame {current_proc.events[-1].frame_number} "
                     f"({current_proc.last_observed_msg}) before Registration Accept/Reject."
@@ -105,3 +130,43 @@ class RegistrationAnalyzer:
             procedures.append(current_proc)
 
         return procedures
+
+    def _can_infer_completion(self, proc: Procedure, events: List[ProtocolEvent]) -> bool:
+        """
+        Infers Registration completion if explicit NAS Registration Accept was unavailable
+        (e.g., due to NAS ciphering), but subsequent procedures requiring a registered UE
+        (Initial Context Setup, PDU Session establishment, Security Mode completion,
+        UE Context Release, Deregistration, Service Request) succeeded without failure.
+        """
+        start_idx = 0
+        if proc.events and proc.events[0] in events:
+            start_idx = events.index(proc.events[0])
+
+        proc_events = events[start_idx:]
+        has_failure = False
+        has_subsequent_registered_activity = False
+
+        for evt in proc_events:
+            msg = evt.message_type
+            if msg in ["Registration Reject", "Authentication Reject", "Security Mode Reject", "Authentication Failure", "SCTP Abort"]:
+                has_failure = True
+                break
+
+            if msg in [
+                "Initial Context Setup Response",
+                "Initial Context Setup Request",
+                "PDU Session Establishment Accept",
+                "PDU Session Resource Setup Response",
+                "PDU Session Resource Setup Request",
+                "Security Mode Complete",
+                "UE Context Release Complete",
+                "UE Context Release Command",
+                "UE Context Release Request",
+                "De-registration Request",
+                "De-registration Accept",
+                "Service Request",
+                "Service Accept"
+            ]:
+                has_subsequent_registered_activity = True
+
+        return (not has_failure) and has_subsequent_registered_activity
