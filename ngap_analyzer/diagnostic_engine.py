@@ -36,6 +36,39 @@ class DiagnosticEngine:
             )
             observations.append(obs)
 
+        # Check Paging statistics across all UEs
+        paging_procs = [p for ue in ue_contexts for p in ue.procedures if p.name == "Paging"]
+        if paging_procs:
+            total_pages = len(paging_procs)
+            unanswered_pages = sum(1 for p in paging_procs if p.status == ProcedureStatus.FAILED)
+            answered_pages = total_pages - unanswered_pages
+            
+            latencies = [p.end_time - p.start_time for p in paging_procs if p.status == ProcedureStatus.COMPLETED and p.end_time and p.start_time]
+            avg_latency_str = f"{sum(latencies)/len(latencies):.3f}s" if latencies else "N/A"
+            
+            total_retries = sum(sum(1 for e in p.events if e.message_type == "Paging") - 1 for p in paging_procs)
+
+            evidence = [
+                f"Total Paging Requests: {total_pages}",
+                f"Answered: {answered_pages}",
+                f"Unanswered: {unanswered_pages}",
+                f"Average Paging Latency: {avg_latency_str}",
+                f"Paging Retransmissions: {total_retries}"
+            ]
+            
+            failure_rate = (unanswered_pages / total_pages) if total_pages > 0 else 0
+            severity = "WARNING" if failure_rate > 0.1 else "INFO"
+            
+            obs = DiagnosticObservation(
+                rule_id="RULE_GLOBAL_PAGING",
+                title="Global Paging Statistics",
+                severity=severity,
+                description=f"Summary of N2 paging procedure execution (Failure Rate: {failure_rate*100:.1f}%).",
+                evidence=evidence,
+                related_frames=[e.frame_number for p in paging_procs for e in p.events]
+            )
+            observations.append(obs)
+
         # Process per-UE diagnostic rules
         for ue in ue_contexts:
             self._evaluate_ue_rules(ue)
@@ -94,3 +127,26 @@ class DiagnosticEngine:
                 ue.observations.append("Identifier continuity maintained.")
             if "No protocol anomalies detected." not in ue.observations:
                 ue.observations.append("No protocol anomalies detected.")
+
+        # Rule: Unanswered or problematic paging procedures for this UE
+        ue_paging = [p for p in ue.procedures if p.name == "Paging"]
+        for p in ue_paging:
+            if p.status == ProcedureStatus.FAILED:
+                obs_msg = f"Unanswered paging event detected (Request frame {p.events[0].frame_number})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)
+            
+            # Paging Latency Timing warning
+            if p.status == ProcedureStatus.COMPLETED and p.end_time and p.start_time:
+                latency = p.end_time - p.start_time
+                if latency > 2.0:
+                    obs_msg = f"High paging response latency detected: {latency:.3f}s (Request frame {p.events[0].frame_number})."
+                    if obs_msg not in ue.observations:
+                        ue.observations.append(obs_msg)
+            
+            # Paging Retransmission warning
+            paging_requests = [e for e in p.events if e.message_type == "Paging"]
+            if len(paging_requests) > 1:
+                obs_msg = f"Paging retransmissions detected ({len(paging_requests)} attempts for Request frame {p.events[0].frame_number})."
+                if obs_msg not in ue.observations:
+                    ue.observations.append(obs_msg)

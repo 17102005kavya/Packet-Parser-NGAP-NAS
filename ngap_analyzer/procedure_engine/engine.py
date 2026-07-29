@@ -13,6 +13,7 @@ from .pdu_session_analyzer import PDUSessionAnalyzer
 from .ng_setup_analyzer import NGSetupAnalyzer
 from .ue_context_analyzer import UEContextAnalyzer
 from .transport_analyzer import TransportAnalyzer
+from .paging_analyzer import PagingAnalyzer
 from .unclassified_collector import UnclassifiedEventCollector
 
 
@@ -30,6 +31,7 @@ class ProcedureAnalysisEngine:
         self.ng_setup_analyzer = NGSetupAnalyzer()
         self.ue_context_analyzer = UEContextAnalyzer()
         self.transport_analyzer = TransportAnalyzer()
+        self.paging_analyzer = PagingAnalyzer()
         self.unclassified_collector = UnclassifiedEventCollector()
 
     def process(self, ue_contexts: List[UEContext], global_events: List[ProtocolEvent]) -> List[Procedure]:
@@ -56,9 +58,10 @@ class ProcedureAnalysisEngine:
             service_procs = self.service_request_analyzer.analyze(ue.events)
             pdu_procs = self.pdu_analyzer.analyze(ue.events)
             ctx_procs = self.ue_context_analyzer.analyze(ue.events)
+            paging_procs = self.paging_analyzer.analyze(ue.events)
             ue_unclassified = self.unclassified_collector.analyze(ue.events)
 
-            all_ue_procs = reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + ue_unclassified
+            all_ue_procs = reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + paging_procs + ue_unclassified
             ue.procedures = all_ue_procs
 
             # Populate explicit failures and incomplete summaries
