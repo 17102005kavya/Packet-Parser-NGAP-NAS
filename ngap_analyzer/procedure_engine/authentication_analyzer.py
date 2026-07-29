@@ -83,6 +83,7 @@ class AuthenticationAnalyzer:
 
                 if msg == "Authentication Response":
                     current_proc.status = ProcedureStatus.COMPLETED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     current_proc.observations.append("Authentication Successful")
@@ -93,6 +94,7 @@ class AuthenticationAnalyzer:
                 elif msg == "Authentication Reject":
                     # Authentication Reject (AMF -> UE) is always terminal.
                     current_proc.status = ProcedureStatus.FAILED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     cause = event.cause_code or "Authentication Reject"
@@ -121,6 +123,7 @@ class AuthenticationAnalyzer:
                     else:
                         # Genuine auth failure (MAC failure, etc.)
                         current_proc.status = ProcedureStatus.FAILED
+                        current_proc.confidence = "DIRECT"
                         current_proc.end_time = event.timestamp
                         current_proc.expected_next_msg = None
                         current_proc.failure_cause = cause or "MAC failure / Authentication Failure"
@@ -134,6 +137,7 @@ class AuthenticationAnalyzer:
 
                 elif msg == "SCTP Abort":
                     current_proc.status = ProcedureStatus.FAILED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     cause = event.cause_code or "SCTP Abort"
@@ -148,20 +152,69 @@ class AuthenticationAnalyzer:
 
         # Flush any still-open procedure at end of capture.
         if current_proc is not None:
-            current_proc.evidence.append(
-                f"Capture ended after frame {current_proc.events[-1].frame_number} "
-                f"without receiving Authentication Response."
-            )
-            if awaiting_resync_retry:
+            if not awaiting_resync_retry and self._can_infer_completion(current_proc, events):
+                current_proc.status = ProcedureStatus.COMPLETED
+                current_proc.confidence = "INFERRED"
+                current_proc.end_time = events[-1].timestamp
+                current_proc.expected_next_msg = None
+                current_proc.evidence.append(
+                    "Authentication completion inferred from subsequent Security Mode / Context Setup progression."
+                )
                 current_proc.observations.append(
-                    "Authentication procedure incomplete: capture ended during SQN resync "
-                    "(synch failure observed, no retry Auth Request received)."
+                    "Authentication Successful (inferred from subsequent successful Security Mode / Context Setup)."
                 )
             else:
-                current_proc.observations.append("Authentication procedure incomplete.")
+                current_proc.confidence = "PARTIAL" if awaiting_resync_retry else "UNKNOWN"
+                current_proc.evidence.append(
+                    f"Capture ended after frame {current_proc.events[-1].frame_number} "
+                    f"without receiving Authentication Response."
+                )
+                if awaiting_resync_retry:
+                    current_proc.observations.append(
+                        "Authentication procedure incomplete: capture ended during SQN resync "
+                        "(synch failure observed, no retry Auth Request received)."
+                    )
+                else:
+                    current_proc.observations.append("Authentication procedure incomplete.")
             procedures.append(current_proc)
 
         return procedures
+
+    def _can_infer_completion(self, proc: Procedure, events: List[ProtocolEvent]) -> bool:
+        """
+        Infers Authentication completion if explicit Auth Response was not decoded/visible,
+        but subsequent Security Mode / Initial Context Setup / PDU Session procedures
+        progressed successfully without any Auth Reject or non-synch Auth Failure.
+        """
+        start_idx = 0
+        if proc.events and proc.events[0] in events:
+            start_idx = events.index(proc.events[0])
+
+        proc_events = events[start_idx:]
+        has_failure = False
+        has_subsequent_activity = False
+
+        for evt in proc_events:
+            msg = evt.message_type
+            if msg in ["Authentication Reject", "Security Mode Reject", "Registration Reject", "SCTP Abort"]:
+                has_failure = True
+                break
+            if msg == "Authentication Failure" and not is_synch_failure(evt.cause_code or ""):
+                has_failure = True
+                break
+
+            if msg in [
+                "Security Mode Command",
+                "Security Mode Complete",
+                "Initial Context Setup Request",
+                "Initial Context Setup Response",
+                "PDU Session Establishment Accept",
+                "PDU Session Resource Setup Request",
+                "PDU Session Resource Setup Response"
+            ]:
+                has_subsequent_activity = True
+
+        return (not has_failure) and has_subsequent_activity
 
     @staticmethod
     def _new_proc(event: ProtocolEvent) -> Procedure:

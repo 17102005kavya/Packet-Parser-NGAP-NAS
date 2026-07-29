@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 
-from ngap_analyzer.models import ProtocolEvent, UEContext, ProcedureStatus
+from ngap_analyzer.models import ProtocolEvent, UEContext, Procedure, ProcedureStatus
 from ngap_analyzer.packet_parser import PacketParser
 from ngap_analyzer.event_extractor import EventExtractor
 from ngap_analyzer.ue_context_manager import UEContextManager
@@ -719,7 +719,547 @@ class TestExtendedSuite(unittest.TestCase):
         self.assertEqual(procs[0].status, ProcedureStatus.INCOMPLETE)
         self.assertEqual(procs[1].status, ProcedureStatus.COMPLETED)
 
+    # ------------------------------------------------------------------
+    # 5GMM Service Request Procedure Tests (3GPP TS 24.501)
+    # ------------------------------------------------------------------
+
+    def test_service_request_successful_with_service_accept(self):
+        """SR-1: Successful Service Request followed by Service Accept -> COMPLETED."""
+        analyzer = __import__("ngap_analyzer.procedure_engine.service_request_analyzer", fromlist=["ServiceRequestAnalyzer"]).ServiceRequestAnalyzer()
+        evt1 = ProtocolEvent(frame_number=1, timestamp=100.0, timestamp_str="100.0", protocol="NAS", direction="gNB -> AMF", message_type="Service Request")
+        evt2 = ProtocolEvent(frame_number=2, timestamp=100.25, timestamp_str="100.25", protocol="NAS", direction="AMF -> gNB", message_type="Service Accept")
+        procs = analyzer.analyze([evt1, evt2])
+
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].name, "Service Request")
+        self.assertEqual(procs[0].status, ProcedureStatus.COMPLETED)
+        self.assertAlmostEqual(procs[0].end_time - procs[0].start_time, 0.25)
+        self.assertIn("250.00ms", procs[0].evidence[1])
+
+    def test_service_request_reject_with_5gmm_cause(self):
+        """SR-2: Service Request rejected by AMF -> FAILED with Cause."""
+        analyzer = __import__("ngap_analyzer.procedure_engine.service_request_analyzer", fromlist=["ServiceRequestAnalyzer"]).ServiceRequestAnalyzer()
+        evt1 = ProtocolEvent(frame_number=10, timestamp=200.0, timestamp_str="200.0", protocol="NAS", direction="gNB -> AMF", message_type="Control Plane Service Request")
+        evt2 = ProtocolEvent(frame_number=11, timestamp=200.15, timestamp_str="200.15", protocol="NAS", direction="AMF -> gNB", message_type="Service Reject", cause_code="5GMM cause: Illegal UE (3)")
+        procs = analyzer.analyze([evt1, evt2])
+
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].status, ProcedureStatus.FAILED)
+        self.assertEqual(procs[0].failure_cause, "5GMM cause: Illegal UE (3)")
+
+    def test_service_request_incomplete(self):
+        """SR-3: Service Request without response -> INCOMPLETE."""
+        analyzer = __import__("ngap_analyzer.procedure_engine.service_request_analyzer", fromlist=["ServiceRequestAnalyzer"]).ServiceRequestAnalyzer()
+        evt1 = ProtocolEvent(frame_number=20, timestamp=300.0, timestamp_str="300.0", protocol="NAS", direction="gNB -> AMF", message_type="Service Request")
+        procs = analyzer.analyze([evt1])
+
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].status, ProcedureStatus.INCOMPLETE)
+        self.assertEqual(procs[0].expected_next_msg, "Service Accept / Service Reject")
+
+    def test_service_request_retransmission_and_duplicate(self):
+        """SR-4: Service Request retransmission / duplicate starter request flushes previous as INCOMPLETE."""
+        analyzer = __import__("ngap_analyzer.procedure_engine.service_request_analyzer", fromlist=["ServiceRequestAnalyzer"]).ServiceRequestAnalyzer()
+        evt1 = ProtocolEvent(frame_number=30, timestamp=400.0, timestamp_str="400.0", protocol="NAS", direction="gNB -> AMF", message_type="Service Request")
+        evt2 = ProtocolEvent(frame_number=31, timestamp=401.0, timestamp_str="401.0", protocol="NAS", direction="gNB -> AMF", message_type="Service Request")
+        evt2.is_retransmission = True
+        evt3 = ProtocolEvent(frame_number=32, timestamp=401.1, timestamp_str="401.1", protocol="NAS", direction="AMF -> gNB", message_type="Service Accept")
+
+        procs = analyzer.analyze([evt1, evt2, evt3])
+        self.assertEqual(len(procs), 2)
+        self.assertEqual(procs[0].status, ProcedureStatus.INCOMPLETE)
+        self.assertEqual(procs[1].status, ProcedureStatus.COMPLETED)
+
+    def test_service_request_multi_ue(self):
+        """SR-5: Service Request end-to-end integration via ProcedureAnalysisEngine."""
+        packets = [
+            {
+                "frame": {"frame.number": ["100"], "frame.time_epoch": ["500.0"], "frame.time": "500.0"},
+                "ngap": {"ngap.procedureCode": ["14"], "ngap.RAN_UE_NGAP_ID": ["1001"]},
+                "nas-5gs": {"nas_5gs.mm.message_type": ["Service request"]}
+            },
+            {
+                "frame": {"frame.number": ["101"], "frame.time_epoch": ["500.2"], "frame.time": "500.2"},
+                "ngap": {"ngap.procedureCode": ["15"], "ngap.RAN_UE_NGAP_ID": ["1001"], "ngap.AMF_UE_NGAP_ID": ["2001"]},
+                "nas-5gs": {"nas_5gs.mm.message_type": ["Service accept"]}
+            }
+        ]
+
+        for pkt in packets:
+            parsed = self.parser.parse_packet(pkt)
+            event = self.extractor.extract_event(parsed)
+            self.ctx_manager.process_event(event)
+
+        ues = self.ctx_manager.get_all_contexts()
+        self.assertEqual(len(ues), 1)
+        global_procs = self.proc_engine.process(ues, self.ctx_manager.get_global_events())
+
+        sr_procs = [p for p in ues[0].procedures if p.name == "Service Request"]
+        self.assertEqual(len(sr_procs), 1)
+        self.assertEqual(sr_procs[0].status, ProcedureStatus.COMPLETED)
+
+    def test_registration_inferred_completed_from_subsequent_setup(self):
+        """
+        REG-6: When explicit Registration Accept is missing/ciphered, but Initial Context Setup
+        and PDU Session Establishment succeed without any Registration Reject or Auth failure,
+        Registration is classified as COMPLETED (inferred).
+        """
+        reg_analyzer = __import__("ngap_analyzer.procedure_engine.registration_analyzer", fromlist=["RegistrationAnalyzer"]).RegistrationAnalyzer()
+        events = [
+            ProtocolEvent(frame_number=1, timestamp=100.0, timestamp_str="100.0", protocol="NAS", direction="gNB -> AMF", message_type="Registration Request"),
+            ProtocolEvent(frame_number=2, timestamp=100.1, timestamp_str="100.1", protocol="NAS", direction="AMF -> gNB", message_type="Security Mode Command"),
+            ProtocolEvent(frame_number=3, timestamp=100.2, timestamp_str="100.2", protocol="NAS", direction="gNB -> AMF", message_type="Security Mode Complete"),
+            ProtocolEvent(frame_number=4, timestamp=100.3, timestamp_str="100.3", protocol="NGAP", direction="AMF -> gNB", message_type="Initial Context Setup Request"),
+            ProtocolEvent(frame_number=5, timestamp=100.4, timestamp_str="100.4", protocol="NGAP", direction="gNB -> AMF", message_type="Initial Context Setup Response"),
+            ProtocolEvent(frame_number=6, timestamp=100.5, timestamp_str="100.5", protocol="NGAP", direction="gNB -> AMF", message_type="PDU Session Resource Setup Response"),
+        ]
+
+        procs = reg_analyzer.analyze(events)
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].status, ProcedureStatus.COMPLETED)
+        self.assertEqual(procs[0].confidence, "INFERRED")
+        self.assertIn("inferred", procs[0].observations[0].lower())
+
+    def test_confidence_serialization_in_to_dict(self):
+        """INF-1: Verify confidence field is serialized in Procedure.to_dict()."""
+        proc = Procedure(name="Registration", status=ProcedureStatus.COMPLETED, confidence="INFERRED")
+        d = proc.to_dict()
+        self.assertEqual(d["confidence"], "INFERRED")
+
+    def test_authentication_inferred_completion_from_security_mode(self):
+        """INF-2: Authentication completion inferred from subsequent Security Mode & Context Setup."""
+        auth_analyzer = __import__("ngap_analyzer.procedure_engine.authentication_analyzer", fromlist=["AuthenticationAnalyzer"]).AuthenticationAnalyzer()
+        events = [
+            ProtocolEvent(frame_number=1, timestamp=100.0, timestamp_str="100.0", protocol="NAS", direction="AMF -> gNB", message_type="Authentication Request"),
+            ProtocolEvent(frame_number=2, timestamp=100.1, timestamp_str="100.1", protocol="NAS", direction="AMF -> gNB", message_type="Security Mode Command"),
+            ProtocolEvent(frame_number=3, timestamp=100.2, timestamp_str="100.2", protocol="NAS", direction="gNB -> AMF", message_type="Security Mode Complete"),
+        ]
+        procs = auth_analyzer.analyze(events)
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].status, ProcedureStatus.COMPLETED)
+        self.assertEqual(procs[0].confidence, "INFERRED")
+
+    def test_security_mode_inferred_completion_from_context_setup(self):
+        """INF-3: Security Mode completion inferred from subsequent Initial Context Setup."""
+        sec_analyzer = __import__("ngap_analyzer.procedure_engine.security_analyzer", fromlist=["SecurityAnalyzer"]).SecurityAnalyzer()
+        events = [
+            ProtocolEvent(frame_number=1, timestamp=100.0, timestamp_str="100.0", protocol="NAS", direction="AMF -> gNB", message_type="Security Mode Command"),
+            ProtocolEvent(frame_number=2, timestamp=100.1, timestamp_str="100.1", protocol="NGAP", direction="AMF -> gNB", message_type="Initial Context Setup Request"),
+            ProtocolEvent(frame_number=3, timestamp=100.2, timestamp_str="100.2", protocol="NGAP", direction="gNB -> AMF", message_type="Initial Context Setup Response"),
+        ]
+        procs = sec_analyzer.analyze(events)
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(procs[0].status, ProcedureStatus.COMPLETED)
+        self.assertEqual(procs[0].confidence, "INFERRED")
+
+    def test_pdu_session_nas_inferred_completion_from_ngap_setup(self):
+        """INF-4: NAS PDU Session Establishment completion inferred from NGAP Resource Setup."""
+        pdu_analyzer = PDUSessionAnalyzer()
+        events = [
+            ProtocolEvent(frame_number=1, timestamp=100.0, timestamp_str="100.0", protocol="NAS", direction="gNB -> AMF", message_type="PDU Session Establishment Request", pdu_session_id=1),
+            ProtocolEvent(frame_number=2, timestamp=100.1, timestamp_str="100.1", protocol="NGAP", direction="AMF -> gNB", message_type="PDU Session Resource Setup Request", pdu_session_id=1),
+            ProtocolEvent(frame_number=3, timestamp=100.2, timestamp_str="100.2", protocol="NGAP", direction="gNB -> AMF", message_type="PDU Session Resource Setup Response", pdu_session_id=1),
+        ]
+        procs = pdu_analyzer.analyze(events)
+        nas_procs = [p for p in procs if "Establishment/NAS" in p.name]
+        self.assertEqual(len(nas_procs), 1)
+        self.assertEqual(nas_procs[0].status, ProcedureStatus.COMPLETED)
+        self.assertEqual(nas_procs[0].confidence, "INFERRED")
+
+    def test_dynamic_procedure_code_discovery(self):
+        """DISC-1: Verify PacketParser automatically discovers and caches unmapped procedure codes from JSON."""
+        pkt = {
+            "frame": {"frame.number": ["99"], "frame.time_epoch": ["999.0"], "frame.time": "999.0"},
+            "ngap": {
+                "ngap.procedureCode": ["44"],
+                "ngap.elementaryProcedure": ["uERadioCapabilityInfoIndication"]
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "44")
+        self.assertEqual(parsed["message_type"], "UE Radio Capability Info Indication")
+        self.assertEqual(self.parser.NGAP_PROCEDURE_CODES.get(44), "UE Radio Capability Info Indication")
+
+    def test_dynamic_pdu_tree_discovery_uplink(self):
+        """Verify dynamic discovery of procedure name from NGAP_PDU_tree (Uplink NAS Transport)."""
+        pkt = {
+            "frame": {"frame.number": ["100"], "frame.time_epoch": ["1000.0"], "frame.time": "1000.0"},
+            "ngap": {
+                "ngap.procedureCode": ["43"],
+                "ngap.NGAP_PDU_tree": {
+                    "initiatingMessage_element": {
+                        "initiatingMessagevalue_element": {
+                            "ngap.UplinkNASTransport_element": {}
+                        }
+                    }
+                }
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "43")
+        self.assertEqual(parsed["message_type"], "Uplink NAS Transport")
+
+    def test_dynamic_pdu_tree_discovery_setup_response(self):
+        """Verify dynamic discovery of NG Setup Response using PDU tree and pdu_type."""
+        pkt = {
+            "frame": {"frame.number": ["101"], "frame.time_epoch": ["1001.0"], "frame.time": "1001.0"},
+            "ngap": {
+                "ngap.procedureCode": ["21"],
+                "ngap.pdu_type": ["1"], # successfulOutcome
+                "ngap.NGAP_PDU_tree": {
+                    "successfulOutcome_element": {
+                        "successfulOutcomevalue_element": {
+                            "ngap.NGSetupResponse_element": {}
+                        }
+                    }
+                }
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "21")
+        self.assertEqual(parsed["message_type"], "NG Setup Response")
+
+    def test_dynamic_pdu_tree_discovery_pdu_session_setup(self):
+        """Verify dynamic discovery and mapping of PDUResourceSetup_element to PDU Session Resource Setup Request."""
+        pkt = {
+            "frame": {"frame.number": ["102"], "frame.time_epoch": ["1002.0"], "frame.time": "1002.0"},
+            "ngap": {
+                "ngap.procedureCode": ["27"],
+                "ngap.pdu_type": ["0"], # initiatingMessage
+                "ngap.NGAP_PDU_tree": {
+                    "initiatingMessage_element": {
+                        "initiatingMessagevalue_element": {
+                            "ngap.PDUResourceSetup_element": {}
+                        }
+                    }
+                }
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "27")
+        self.assertEqual(parsed["message_type"], "PDU Session Resource Setup Request")
+
+    def test_user_reported_uplink_nas_transport_46(self):
+        """Verify dynamic discovery of procedure name from user-reported Uplink NAS Transport packet with procedureCode 46."""
+        pkt = {
+            "_source": {
+                "layers": {
+                    "frame": {
+                        "frame.number": "64",
+                        "frame.time_epoch": "2026-04-01T14:15:47.468473000Z",
+                        "frame.time": "2026-04-01T14:15:47.468473000Z"
+                    },
+                    "ip": {
+                        "ip.src": "192.168.10.23",
+                        "ip.dst": "192.168.10.132"
+                    },
+                    "sctp": {
+                        "sctp.srcport": "38412",
+                        "sctp.dstport": "38412"
+                    },
+                    "ngap": {
+                        "per.extension_bit": "0",
+                        "per.choice_index": "0",
+                        "ngap.NGAP_PDU": "0",
+                        "ngap.NGAP_PDU_tree": {
+                            "ngap.initiatingMessage_element": {
+                                "ngap.procedureCode": "46",
+                                "per.enum_index": "1",
+                                "ngap.criticality": "1",
+                                "per.open_type_length": "126",
+                                "ngap.initiatingMessagevalue_element": {
+                                    "ngap.UplinkNASTransport_element": {
+                                        "per.extension_bit": "0",
+                                        "per.sequence_of_length": "4",
+                                        "ngap.protocolIEs": "4",
+                                        "ngap.protocolIEs_tree": {
+                                            "Item 0: id-AMF-UE-NGAP-ID": {
+                                                "ngap.ProtocolIE_Field_element": {
+                                                    "ngap.id": "10",
+                                                    "per.enum_index": "0",
+                                                    "ngap.criticality": "0",
+                                                    "per.open_type_length": "3",
+                                                    "ngap.ie_field_value_element": {
+                                                        "ngap.AMF_UE_NGAP_ID": "279"
+                                                    }
+                                                }
+                                            },
+                                            "Item 1: id-RAN-UE-NGAP-ID": {
+                                                "ngap.ProtocolIE_Field_element": {
+                                                    "ngap.id": "85",
+                                                    "per.enum_index": "0",
+                                                    "ngap.criticality": "0",
+                                                    "per.open_type_length": "2",
+                                                    "ngap.ie_field_value_element": {
+                                                        "ngap.RAN_UE_NGAP_ID": "8"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "46")
+        self.assertEqual(parsed["message_type"], "Uplink NAS Transport")
+
+    def test_dynamic_pdu_tree_discovery_no_element(self):
+        """Verify dynamic discovery of procedure name when _element suffixes are missing from the PDU tree."""
+        pkt = {
+            "_source": {
+                "layers": {
+                    "frame": {
+                        "frame.number": "65",
+                        "frame.time_epoch": "2026-04-01T14:15:47.468473000Z",
+                        "frame.time": "2026-04-01T14:15:47.468473000Z"
+                    },
+                    "ngap": {
+                        "ngap.procedureCode": "46",
+                        "ngap.NGAP_PDU_tree": {
+                            "ngap.initiatingMessage": {
+                                "ngap.initiatingMessagevalue": {
+                                    "ngap.UplinkNASTransport": {
+                                        "per.extension_bit": "0",
+                                        "ngap.protocolIEs": "4"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        parsed = self.parser.parse_packet(pkt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["procedure_code"], "46")
+        self.assertEqual(parsed["message_type"], "Uplink NAS Transport")
+
+    def test_all_procedure_codes_resolve(self):
+        """Verify that every procedure code from 0 to 48 in NGAP_PROCEDURES resolves to a non-null, non-Unknown Signalling name."""
+        for code in self.parser.NGAP_PROCEDURES.keys():
+            pkt = {
+                "_source": {
+                    "layers": {
+                        "frame": {
+                            "frame.number": "100",
+                            "frame.time_epoch": "2026-04-01T14:15:47.468473000Z",
+                            "frame.time": "2026-04-01T14:15:47.468473000Z"
+                        },
+                        "ngap": {
+                            "ngap.procedureCode": str(code)
+                        }
+                    }
+                }
+            }
+            parsed = self.parser.parse_packet(pkt)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["procedure_code"], str(code))
+            self.assertNotEqual(parsed["message_type"], "Unknown Signalling")
+            self.assertIsNotNone(parsed["message_type"])
+
+    def test_procedure_code_family_resolution(self):
+        """Verify proper resolution of initiatingMessage, successfulOutcome, and unsuccessfulOutcome families."""
+        # Test mapped procedure code 21 (NG Setup)
+        for pdu_type, expected_msg in [
+            ("initiatingMessage", "NG Setup Request"),
+            ("successfulOutcome", "NG Setup Response"),
+            ("unsuccessfulOutcome", "NG Setup Failure")
+        ]:
+            pkt = {
+                "_source": {
+                    "layers": {
+                        "frame": {
+                            "frame.number": "100",
+                            "frame.time_epoch": "2026-04-01T14:15:47.468473000Z",
+                            "frame.time": "2026-04-01T14:15:47.468473000Z"
+                        },
+                        "ngap": {
+                            "ngap.procedureCode": "21",
+                            "ngap.NGAP_PDU": "0",
+                            "ngap.NGAP_PDU_tree": {
+                                f"ngap.{pdu_type}_element": {}
+                            }
+                        }
+                    }
+                }
+            }
+            parsed = self.parser.parse_packet(pkt)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["message_type"], expected_msg)
+
+        # Test unmapped procedure code 12 (Handover Preparation)
+        for pdu_type in ["initiatingMessage", "successfulOutcome", "unsuccessfulOutcome"]:
+            pkt = {
+                "_source": {
+                    "layers": {
+                        "frame": {
+                            "frame.number": "100",
+                            "frame.time_epoch": "2026-04-01T14:15:47.468473000Z",
+                            "frame.time": "2026-04-01T14:15:47.468473000Z"
+                        },
+                        "ngap": {
+                            "ngap.procedureCode": "12",
+                            "ngap.NGAP_PDU": "0",
+                            "ngap.NGAP_PDU_tree": {
+                                f"ngap.{pdu_type}_element": {}
+                            }
+                        }
+                    }
+                }
+            }
+            parsed = self.parser.parse_packet(pkt)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["message_type"], "Handover Preparation")
+
+    def test_ims_eps_fallback_flow_is_not_failure(self):
+        """Verify that a textbook EPS Fallback for IMS Voice flow is NOT flagged as a failure."""
+        from ngap_analyzer.models import ProtocolEvent, UEContext, ProcedureStatus
+        from ngap_analyzer.procedure_engine.engine import ProcedureAnalysisEngine
+
+        # Flow: Service Request -> Initial Context Setup Request/Response -> 
+        # UE Radio Capability Info Indication -> PDU Session Resource Setup Request/Response -> 
+        # PDU Session Resource Modify Request -> UE Context Release Request -> 
+        # UE Context Release Command -> UE Context Release Complete
+        events = [
+            ProtocolEvent(frame_number=1, timestamp=10.0, timestamp_str="10.0", protocol="NAS", direction="gNB -> AMF", message_type="Service Request", ran_ue_ngap_id=18, amf_ue_ngap_id=289),
+            ProtocolEvent(frame_number=2, timestamp=11.0, timestamp_str="11.0", protocol="NGAP", direction="AMF -> gNB", message_type="Initial Context Setup Request", ran_ue_ngap_id=18, amf_ue_ngap_id=289),
+            ProtocolEvent(frame_number=3, timestamp=12.0, timestamp_str="12.0", protocol="NGAP", direction="gNB -> AMF", message_type="Initial Context Setup Response", ran_ue_ngap_id=18, amf_ue_ngap_id=289),
+            ProtocolEvent(frame_number=4, timestamp=13.0, timestamp_str="13.0", protocol="NGAP", direction="gNB -> AMF", message_type="UE Radio Capability Info Indication", ran_ue_ngap_id=18, amf_ue_ngap_id=289),
+            ProtocolEvent(frame_number=5, timestamp=14.0, timestamp_str="14.0", protocol="NGAP", direction="AMF -> gNB", message_type="PDU Session Resource Setup Request", ran_ue_ngap_id=18, amf_ue_ngap_id=289, pdu_session_id=1),
+            ProtocolEvent(frame_number=6, timestamp=15.0, timestamp_str="15.0", protocol="NGAP", direction="gNB -> AMF", message_type="PDU Session Resource Setup Response", ran_ue_ngap_id=18, amf_ue_ngap_id=289, pdu_session_id=1),
+            ProtocolEvent(frame_number=7, timestamp=16.0, timestamp_str="16.0", protocol="NGAP", direction="AMF -> gNB", message_type="PDU Session Resource Modify Request", ran_ue_ngap_id=18, amf_ue_ngap_id=289, pdu_session_id=1),
+            ProtocolEvent(frame_number=8, timestamp=17.0, timestamp_str="17.0", protocol="NGAP", direction="gNB -> AMF", message_type="UE Context Release Request", ran_ue_ngap_id=18, amf_ue_ngap_id=289, cause_code="NGAP cause (radioNetwork): ims-voice-eps-fallback-or-rat-fallback-triggered (36)"),
+            ProtocolEvent(frame_number=9, timestamp=18.0, timestamp_str="18.0", protocol="NGAP", direction="AMF -> gNB", message_type="UE Context Release Command", ran_ue_ngap_id=18, amf_ue_ngap_id=289, cause_code="NGAP cause (radioNetwork): ims-voice-eps-fallback-or-rat-fallback-triggered (36)"),
+            ProtocolEvent(frame_number=10, timestamp=19.0, timestamp_str="19.0", protocol="NGAP", direction="gNB -> AMF", message_type="UE Context Release Complete", ran_ue_ngap_id=18, amf_ue_ngap_id=289)
+        ]
+
+        ue = UEContext(context_id="UE_4", ran_ue_ngap_id=18, amf_ue_ngap_id=289)
+        ue.events = events
+
+        engine = ProcedureAnalysisEngine()
+        engine.process([ue], [])
+
+        # The flow should NOT be marked as an explicit failure
+        self.assertEqual(len(ue.explicit_failures), 0)
+        
+        # UE Context Release should be COMPLETED, not FAILED
+        release_procs = [p for p in ue.procedures if p.name == "UE Context Release"]
+        self.assertEqual(len(release_procs), 1)
+        self.assertEqual(release_procs[0].status, ProcedureStatus.COMPLETED)
+
+    def test_ue_context_to_dict_attaches_procedure_status(self):
+        """Verify that UEContext.to_dict() attaches procedure_status to events in the timeline."""
+        from ngap_analyzer.models import ProtocolEvent, UEContext, Procedure, ProcedureStatus
+
+        evt1 = ProtocolEvent(frame_number=1, timestamp=1.0, timestamp_str="1.0", protocol="NGAP", direction="gNB -> AMF", message_type="Initial UE Message")
+        evt2 = ProtocolEvent(frame_number=2, timestamp=2.0, timestamp_str="2.0", protocol="NGAP", direction="AMF -> gNB", message_type="UE Context Release Command")
+        
+        proc = Procedure(name="UE Context Release", status=ProcedureStatus.FAILED, events=[evt2])
+        
+        ue = UEContext(context_id="UE_TEST")
+        ue.events = [evt1, evt2]
+        ue.procedures = [proc]
+        
+        ue_dict = ue.to_dict()
+        timeline = ue_dict["timeline"]
+        
+        self.assertEqual(len(timeline), 2)
+        # Event 1 is not part of any procedure -> status is None
+        self.assertIsNone(timeline[0]["procedure_status"])
+        # Event 2 is part of a Failed procedure -> status is "Failed"
+        self.assertEqual(timeline[1]["procedure_status"], "Failed")
+
+    def test_dynamic_discovery_procedures(self):
+        """Verify dynamic discovery correctly maps and resolves codes 22, 37, 41, and 42."""
+        cases = [
+            (22, "OverloadStart", "Overload Start"),
+            (37, "RRCInactiveTransitionReport", "RRC Inactive Transition Report"),
+            (41, "UEContextReleaseCommand", "UE Context Release Command"),
+            (42, "UEContextReleaseRequest", "UE Context Release Request")
+        ]
+        for code, elem_name, expected_msg in cases:
+            pkt = {
+                "_source": {
+                    "layers": {
+                        "frame": {
+                            "frame.number": "100",
+                            "frame.time_epoch": "10.0",
+                            "frame.time": "10.0"
+                        },
+                        "ngap": {
+                            "ngap.procedureCode": str(code),
+                            "ngap.NGAP_PDU": "0",
+                            "ngap.NGAP_PDU_tree": {
+                                "ngap.initiatingMessage_element": {
+                                    "ngap.initiatingMessagevalue_element": {
+                                        f"ngap.{elem_name}_element": {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            # Clear cache to force clean run
+            self.parser.NGAP_PROCEDURE_CODES.pop(code, None)
+            parsed = self.parser.parse_packet(pkt)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["message_type"], expected_msg)
+            # Verify cache matches base procedure name
+            expected_proc_name = expected_msg
+            if code == 41:
+                expected_proc_name = "UE Context Release"
+            elif code == 42:
+                expected_proc_name = "UE Context Release Request"
+            self.assertEqual(self.parser.NGAP_PROCEDURE_CODES.get(code), expected_proc_name)
+
+    def test_static_fallback_procedures(self):
+        """Verify static fallback table maps and resolves codes 22, 37, 41, 42 and others correctly."""
+        # Clean caches for codes under test
+        for code in [22, 37, 41, 42]:
+            self.parser.NGAP_PROCEDURE_CODES.pop(code, None)
+            
+        cases = [
+            (22, "initiatingMessage", "Overload Start"),
+            (37, "initiatingMessage", "RRC Inactive Transition Report"),
+            (41, "initiatingMessage", "UE Context Release Command"),
+            (42, "initiatingMessage", "UE Context Release Request"), # because elem_proc matches uEContextReleaseRequest exactly
+        ]
+        for code, pdu_type, expected_msg in cases:
+            pkt = {
+                "_source": {
+                    "layers": {
+                        "frame": {
+                            "frame.number": "100",
+                            "frame.time_epoch": "10.0",
+                            "frame.time": "10.0"
+                        },
+                        "ngap": {
+                            "ngap.procedureCode": str(code),
+                            "ngap.NGAP_PDU": "0",
+                            "ngap.NGAP_PDU_tree": {
+                                f"ngap.{pdu_type}_element": {}
+                            }
+                        }
+                    }
+                }
+            }
+            parsed = self.parser.parse_packet(pkt)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["message_type"], expected_msg)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

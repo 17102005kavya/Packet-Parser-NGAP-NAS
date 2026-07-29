@@ -174,6 +174,21 @@ class PDUSessionAnalyzer:
                     )
                     procedures.append(old)
 
+                nas_key = (pdu_id, "nas")
+                if nas_key in nas_active:
+                    nas_proc = nas_active.pop(nas_key)
+                    nas_proc.status = ProcedureStatus.COMPLETED
+                    nas_proc.confidence = "INFERRED"
+                    nas_proc.end_time = event.timestamp
+                    nas_proc.expected_next_msg = None
+                    nas_proc.evidence.append(
+                        f"Inferred completion from NGAP PDU Session Resource Setup in frame {event.frame_number}."
+                    )
+                    nas_proc.observations.append(
+                        "NAS PDU Session Establishment COMPLETED (inferred from NGAP Resource Setup)."
+                    )
+                    procedures.append(nas_proc)
+
                 ngap_active[key] = Procedure(
                     name=f"PDU Session Resource Setup/NGAP (ID: {pdu_id})",
                     status=ProcedureStatus.INCOMPLETE,
@@ -194,7 +209,22 @@ class PDUSessionAnalyzer:
                     proc.expected_next_msg = None
                     proc.observations.append("NGAP PDU Session Resource Setup succeeded")
                     procedures.append(proc)
-                else:
+
+                nas_key = (pdu_id, "nas")
+                if nas_key in nas_active:
+                    nas_proc = nas_active.pop(nas_key)
+                    nas_proc.status = ProcedureStatus.COMPLETED
+                    nas_proc.confidence = "INFERRED"
+                    nas_proc.end_time = event.timestamp
+                    nas_proc.expected_next_msg = None
+                    nas_proc.evidence.append(
+                        f"Inferred completion from NGAP PDU Session Resource Setup Response in frame {event.frame_number}."
+                    )
+                    nas_proc.observations.append(
+                        "NAS PDU Session Establishment COMPLETED (inferred from NGAP Resource Setup Response)."
+                    )
+                    procedures.append(nas_proc)
+                elif proc is None:
                     logger.debug(
                         "PDU Session Resource Setup Response (pdu_id=%d, frame %d) "
                         "has no matching open NGAP procedure.", pdu_id, event.frame_number

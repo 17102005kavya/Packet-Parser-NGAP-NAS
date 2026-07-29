@@ -58,29 +58,37 @@ class ReportGenerator:
                 lines.append(" None observed")
             else:
                 for p in ue.procedures:
+                    conf_suffix = " (Inferred)" if getattr(p, "confidence", "DIRECT") == "INFERRED" else ""
                     if p.name == "Authentication":
                         if p.status == ProcedureStatus.COMPLETED:
-                            lines.append(" Authentication Successful")
+                            lines.append(f" Authentication Successful{conf_suffix}")
                         elif p.status == ProcedureStatus.FAILED:
                             lines.append(" Authentication Failed")
                         else:
                             lines.append(" Authentication Incomplete")
                     elif p.name == "Security Mode":
                         if p.status == ProcedureStatus.COMPLETED:
-                            lines.append(" Security Completed")
+                            lines.append(f" Security Completed{conf_suffix}")
                         elif p.status == ProcedureStatus.FAILED:
                             lines.append(" Security Failed")
                         else:
                             lines.append(" Security Incomplete")
+                    elif p.name == "Service Request":
+                        if p.status == ProcedureStatus.COMPLETED:
+                            lines.append(f" Service Request Completed{conf_suffix}")
+                        elif p.status == ProcedureStatus.FAILED:
+                            lines.append(" Service Request Failed")
+                        else:
+                            lines.append(" Service Request Incomplete")
                     elif "PDU Session" in p.name:
                         if p.status == ProcedureStatus.COMPLETED:
-                            lines.append(" PDU Session Established")
+                            lines.append(f" PDU Session Established{conf_suffix}")
                         elif p.status == ProcedureStatus.FAILED:
                             lines.append(" PDU Session Failed")
                         else:
                             lines.append(" PDU Session Incomplete")
                     else:
-                        lines.append(f" {p.name} {p.status.value}")
+                        lines.append(f" {p.name} {p.status.value}{conf_suffix}")
 
             lines.append("----------------------------------------------------")
             lines.append("Explicit Failures")

@@ -54,6 +54,7 @@ class SecurityAnalyzer:
 
                 if msg == "Security Mode Complete":
                     current_proc.status = ProcedureStatus.COMPLETED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     current_proc.observations.append("Security Completed")
@@ -62,6 +63,7 @@ class SecurityAnalyzer:
 
                 elif msg == "Security Mode Reject":
                     current_proc.status = ProcedureStatus.FAILED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     cause = event.cause_code or "UE returned Security Mode Reject"
@@ -75,6 +77,7 @@ class SecurityAnalyzer:
 
                 elif msg == "SCTP Abort":
                     current_proc.status = ProcedureStatus.FAILED
+                    current_proc.confidence = "DIRECT"
                     current_proc.end_time = event.timestamp
                     current_proc.expected_next_msg = None
                     cause = event.cause_code or "SCTP Abort"
@@ -87,10 +90,54 @@ class SecurityAnalyzer:
                     current_proc = None
 
         if current_proc is not None:
-            current_proc.evidence.append(
-                f"Capture ended after frame {current_proc.events[-1].frame_number} without Security Mode Complete."
-            )
-            current_proc.observations.append("Security Mode procedure incomplete.")
+            if self._can_infer_completion(current_proc, events):
+                current_proc.status = ProcedureStatus.COMPLETED
+                current_proc.confidence = "INFERRED"
+                current_proc.end_time = events[-1].timestamp
+                current_proc.expected_next_msg = None
+                current_proc.evidence.append(
+                    "Security Mode completion inferred from subsequent Initial Context Setup / PDU Session establishment."
+                )
+                current_proc.observations.append(
+                    "Security Completed (inferred from subsequent Context Setup / PDU Session establishment)."
+                )
+            else:
+                current_proc.confidence = "PARTIAL"
+                current_proc.evidence.append(
+                    f"Capture ended after frame {current_proc.events[-1].frame_number} without Security Mode Complete."
+                )
+                current_proc.observations.append("Security Mode procedure incomplete.")
             procedures.append(current_proc)
 
         return procedures
+
+    def _can_infer_completion(self, proc: Procedure, events: List[ProtocolEvent]) -> bool:
+        """
+        Infers Security Mode completion if explicit Security Mode Complete was not visible,
+        but subsequent Initial Context Setup or PDU Session procedures progressed successfully.
+        Never infers completion if Security Mode Reject or SCTP Abort occurred.
+        """
+        start_idx = 0
+        if proc.events and proc.events[0] in events:
+            start_idx = events.index(proc.events[0])
+
+        proc_events = events[start_idx:]
+        has_failure = False
+        has_subsequent_activity = False
+
+        for evt in proc_events:
+            msg = evt.message_type
+            if msg in ["Security Mode Reject", "Registration Reject", "Authentication Reject", "SCTP Abort"]:
+                has_failure = True
+                break
+
+            if msg in [
+                "Initial Context Setup Request",
+                "Initial Context Setup Response",
+                "PDU Session Establishment Accept",
+                "PDU Session Resource Setup Request",
+                "PDU Session Resource Setup Response"
+            ]:
+                has_subsequent_activity = True
+
+        return (not has_failure) and has_subsequent_activity

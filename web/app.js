@@ -377,12 +377,7 @@ function createUECard(ue) {
     const gnbIp = ue.gnb_ip || 'gNB IP';
     const amfIp = ue.amf_ip || 'AMF IP';
 
-    let procsHtml = '';
-    if (ue.procedures && ue.procedures.length > 0) {
-        procsHtml = ue.procedures.map(p => `<span class="proc-chip">${p.name}: <strong>${p.status}</strong></span>`).join('');
-    } else {
-        procsHtml = '<span class="proc-chip">No procedures</span>';
-    }
+    let procsHtml = formatProceduresHtml(ue.procedures);
 
     let failureAlert = '';
     if (ue.explicit_failures && ue.explicit_failures.length > 0) {
@@ -486,7 +481,7 @@ function openUEModal(ue) {
                 <div class="seq-msg-card">
                     <div>
                         <strong>${event.message_type}</strong>
-                        ${event.cause_code ? `<div style="color:#fca5a5; font-size:0.75rem; margin-top:0.2rem;">Cause: ${event.cause_code}</div>` : ''}
+                        ${event.cause_code ? `<div style="color:${event.procedure_status === 'Failed' ? '#fca5a5' : 'var(--text-muted)'}; font-size:0.75rem; margin-top:0.2rem;">Cause: ${event.cause_code}</div>` : ''}
                     </div>
                     <span class="seq-direction ${dirClass}">${event.direction}</span>
                 </div>
@@ -515,6 +510,53 @@ function openUEModal(ue) {
     document.getElementById('modal-json-view').textContent = JSON.stringify(ue, null, 2);
 
     document.getElementById('detail-modal').classList.remove('hidden');
+}
+
+function formatProceduresHtml(procedures) {
+    if (!procedures || procedures.length === 0) {
+        return '<span class="proc-chip">No procedures</span>';
+    }
+    const vendorProcs = procedures.filter(p => p.name === 'Vendor Auth Report');
+    const nonVendorProcs = procedures.filter(p => p.name !== 'Vendor Auth Report');
+
+    let chips = nonVendorProcs.map(p => {
+        const infTag = p.confidence === 'INFERRED' ? ' (Inferred)' : '';
+        return `<span class="proc-chip">${p.name}: <strong>${p.status}${infTag}</strong></span>`;
+    });
+
+    if (vendorProcs.length > 0) {
+        const statusMap = {};
+        vendorProcs.forEach(p => {
+            statusMap[p.status] = (statusMap[p.status] || 0) + 1;
+        });
+        Object.entries(statusMap).forEach(([status, count]) => {
+            const countStr = count > 1 ? ` ×${count}` : '';
+            chips.push(`<span class="proc-chip">Vendor Auth Report: <strong>${status}${countStr}</strong></span>`);
+        });
+    }
+    return chips.join(' ');
+}
+
+function formatExplicitFailuresHtml(explicitFailures) {
+    if (!explicitFailures || explicitFailures.length === 0) return '';
+
+    const vendorFailures = explicitFailures.filter(f => f.procedure === 'Vendor Auth Report');
+    const nonVendorFailures = explicitFailures.filter(f => f.procedure !== 'Vendor Auth Report');
+
+    let html = nonVendorFailures.map(f => `<div style="color:#fca5a5; font-size:0.8rem; margin-top:0.25rem;">🚨 <strong>${f.procedure}</strong>: ${f.cause}</div>`).join('');
+
+    if (vendorFailures.length > 0) {
+        if (vendorFailures.length === 1) {
+            html += `<div style="color:#fca5a5; font-size:0.8rem; margin-top:0.25rem;">🚨 <strong>Vendor Auth Report</strong>: ${vendorFailures[0].cause}</div>`;
+        } else {
+            html += `<div style="color:#fca5a5; font-size:0.8rem; margin-top:0.25rem;">🚨 <strong>Vendor Auth Report (${vendorFailures.length} Failures)</strong>:</div>`;
+            vendorFailures.forEach(f => {
+                const frameStr = f.frame_number ? `Frame #${f.frame_number}: ` : '';
+                html += `<div style="color:#fca5a5; font-size:0.75rem; margin-left:0.8rem; margin-top:0.15rem;">• ${frameStr}${f.cause}</div>`;
+            });
+        }
+    }
+    return html;
 }
 
 function formatTimestamp(ts) {

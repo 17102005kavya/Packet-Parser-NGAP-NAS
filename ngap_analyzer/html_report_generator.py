@@ -203,7 +203,10 @@ class HTMLReportGenerator:
                 const ranStr = ue.ran_ue_ngap_id !== null ? `RAN ID: ${{ue.ran_ue_ngap_id}}` : 'RAN ID: (none)';
                 const amfStr = ue.amf_ue_ngap_id !== null ? `AMF ID: ${{ue.amf_ue_ngap_id}}` : 'AMF ID: (none)';
                 
-                let procsHtml = (ue.procedures || []).map(p => `<span class="badge" style="background:rgba(255,255,255,0.06);">${{p.name}}: ${{p.status}}</span>`).join(' ');
+                let procsHtml = (ue.procedures || []).map(p => {{
+                    const infTag = p.confidence === 'INFERRED' ? ' 🔍' : '';
+                    return `<span class="badge" style="background:rgba(255,255,255,0.06);">${{p.name}}: ${{p.status}}${{infTag}}</span>`;
+                }}).join(' ');
                 let diagSummary = '';
                 if (hasFail) {{
                     diagSummary += `<div style="color:#fca5a5; font-size:0.8rem; margin-top:0.2rem;">🚨 ${{ue.explicit_failures[0].procedure}} (${{ue.explicit_failures[0].cause}})</div>`;
@@ -269,7 +272,7 @@ class HTMLReportGenerator:
                     <div class="seq-msg">
                         <div>
                             <strong>${{evt.message_type}}</strong>
-                            ${{evt.cause_code ? `<div style="color:#fca5a5; font-size:0.75rem; margin-top:0.2rem;">Cause: ${{evt.cause_code}}</div>` : ''}}
+                            ${{evt.cause_code ? `<div style="color:${{evt.procedure_status === 'Failed' ? '#fca5a5' : 'var(--text-muted)'}}; font-size:0.75rem; margin-top:0.2rem;">Cause: ${{evt.cause_code}}</div>` : ''}}
                         </div>
                         <span style="font-weight:600; color:${{isGnb ? '#a5b4fc' : '#67e8f9'}};">${{evt.direction}}</span>
                     </div>

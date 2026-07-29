@@ -8,6 +8,7 @@ from ..models import ProtocolEvent, UEContext, Procedure
 from .registration_analyzer import RegistrationAnalyzer
 from .authentication_analyzer import AuthenticationAnalyzer
 from .security_analyzer import SecurityAnalyzer
+from .service_request_analyzer import ServiceRequestAnalyzer
 from .pdu_session_analyzer import PDUSessionAnalyzer
 from .ng_setup_analyzer import NGSetupAnalyzer
 from .ue_context_analyzer import UEContextAnalyzer
@@ -24,6 +25,7 @@ class ProcedureAnalysisEngine:
         self.registration_analyzer = RegistrationAnalyzer()
         self.auth_analyzer = AuthenticationAnalyzer()
         self.security_analyzer = SecurityAnalyzer()
+        self.service_request_analyzer = ServiceRequestAnalyzer()
         self.pdu_analyzer = PDUSessionAnalyzer()
         self.ng_setup_analyzer = NGSetupAnalyzer()
         self.ue_context_analyzer = UEContextAnalyzer()
@@ -51,11 +53,12 @@ class ProcedureAnalysisEngine:
             reg_procs = self.registration_analyzer.analyze(ue.events)
             auth_procs = self.auth_analyzer.analyze(ue.events)
             sec_procs = self.security_analyzer.analyze(ue.events)
+            service_procs = self.service_request_analyzer.analyze(ue.events)
             pdu_procs = self.pdu_analyzer.analyze(ue.events)
             ctx_procs = self.ue_context_analyzer.analyze(ue.events)
             ue_unclassified = self.unclassified_collector.analyze(ue.events)
 
-            all_ue_procs = reg_procs + auth_procs + sec_procs + pdu_procs + ctx_procs + ue_unclassified
+            all_ue_procs = reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + ue_unclassified
             ue.procedures = all_ue_procs
 
             # Populate explicit failures and incomplete summaries

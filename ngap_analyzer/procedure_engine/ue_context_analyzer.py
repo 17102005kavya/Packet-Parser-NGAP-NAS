@@ -36,11 +36,12 @@ class UEContextAnalyzer:
         "release-due-to-5gc-generated-reason",
         "successful-handover",
         "ue-context-transfer",
-        # nas category (TS 38.413 §9.3.1.2):
         "deregister",
-        # transport category — none are benign (resource-unavailable etc. = real problem)
-        # protocol category — none are benign (all indicate protocol violations)
-        # misc category — none are benign (hardware-failure etc. = real problem)
+        "ng-intra-system-handover-triggered",
+        "ng-inter-system-handover-triggered",
+        "xn-handover-triggered",
+        "redirection",
+        "ims-voice-eps-fallback-or-rat-fallback-triggered",
     }
 
     # Messages relevant to the Initial Context Setup procedure.
