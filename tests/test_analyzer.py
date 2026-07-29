@@ -1440,6 +1440,69 @@ class TestExtendedSuite(unittest.TestCase):
         self.assertTrue(any("NAS message delivery failure detected" in obs for obs in ue.observations))
         self.assertTrue(any("Error Indication detected" in obs for obs in ue.observations))
 
+    def test_nrppa_timeouts_and_retransmissions(self):
+        """Verify NRPPa transport flow, generic timeout detection, and duplicate/retransmission classification."""
+        from ngap_analyzer.models import ProtocolEvent, UEContext, ProcedureStatus
+        from ngap_analyzer.procedure_engine.engine import ProcedureAnalysisEngine
+        from ngap_analyzer.diagnostic_engine import DiagnosticEngine
+
+        ue = UEContext(context_id="UE_COMP_2", fiveg_s_tmsi="0x778899")
+        
+        events = [
+            # 1. NRPPa completed transport
+            ProtocolEvent(frame_number=1, timestamp=10.0, timestamp_str="10.0", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"),
+            ProtocolEvent(frame_number=2, timestamp=10.5, timestamp_str="10.5", protocol="NGAP", direction="gNB -> AMF", message_type="Uplink UE Associated NRPPa Transport"),
+
+            # 2. Legitimate protocol retransmission (same type, >50ms apart)
+            ProtocolEvent(frame_number=3, timestamp=12.0, timestamp_str="12.0", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"),
+            ProtocolEvent(frame_number=4, timestamp=13.5, timestamp_str="13.5", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"), # retransmission
+            ProtocolEvent(frame_number=5, timestamp=14.0, timestamp_str="14.0", protocol="NGAP", direction="gNB -> AMF", message_type="Uplink UE Associated NRPPa Transport"),
+
+            # 3. Duplicate capture packet (same type, <50ms apart)
+            ProtocolEvent(frame_number=6, timestamp=15.0, timestamp_str="15.0", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"),
+            ProtocolEvent(frame_number=7, timestamp=15.01, timestamp_str="15.01", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"), # duplicate capture
+
+            # 4. Incomplete procedure that triggers Timeout Detector (>5.0s threshold)
+            ProtocolEvent(frame_number=8, timestamp=20.0, timestamp_str="20.0", protocol="NGAP", direction="AMF -> gNB", message_type="Downlink UE Associated NRPPa Transport"),
+            # Capture ends at timestamp 26.0 (difference is 6.0s > 5.0s threshold)
+            ProtocolEvent(frame_number=9, timestamp=26.0, timestamp_str="26.0", protocol="NGAP", direction="gNB -> AMF", message_type="Uplink RAN Status Transfer"),
+        ]
+        ue.events = events
+
+        engine = ProcedureAnalysisEngine()
+        engine.process([ue], [])
+
+        # Check UE Associated NRPPa procedures
+        nrppa_procs = [p for p in ue.procedures if p.name == "UE Associated NRPPa Transport"]
+        self.assertEqual(len(nrppa_procs), 4)
+
+        # Assert completed transport latency
+        p_comp = nrppa_procs[0]
+        self.assertEqual(p_comp.status, ProcedureStatus.COMPLETED)
+        self.assertAlmostEqual(p_comp.end_time - p_comp.start_time, 0.5)
+
+        # Assert retransmission annotation
+        p_retrans = nrppa_procs[1]
+        self.assertTrue(any("Protocol retransmission of Downlink UE Associated NRPPa Transport detected" in obs for obs in p_retrans.observations))
+
+        # Assert duplicate capture annotation
+        p_dup = nrppa_procs[2]
+        self.assertTrue(any("Duplicate capture of Downlink UE Associated NRPPa Transport detected" in obs for obs in p_dup.observations))
+
+        # Assert timeout detection triggers
+        p_timeout = nrppa_procs[3]
+        self.assertEqual(p_timeout.status, ProcedureStatus.INCOMPLETE)
+        self.assertTrue(any("Timeout warning" in obs for obs in p_timeout.observations))
+        self.assertTrue(any("Most likely root cause" in obs for obs in p_timeout.observations))
+
+        # Run Diagnostics
+        diag_engine = DiagnosticEngine()
+        diag_engine.evaluate([ue], [], [])
+
+        # Assert diagnostics observations match expected alerts
+        self.assertTrue(any("Timeout warning in procedure UE Associated NRPPa Transport." in obs for obs in ue.observations))
+        self.assertTrue(any("Protocol retransmissions observed in UE Associated NRPPa Transport procedure." in obs for obs in ue.observations))
+
 
 if __name__ == "__main__":
     unittest.main()

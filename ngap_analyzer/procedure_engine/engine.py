@@ -23,6 +23,9 @@ from .handover_analyzer import HandoverAnalyzer
 from .path_switch_analyzer import PathSwitchAnalyzer
 from .ran_status_transfer_analyzer import RANStatusTransferAnalyzer
 from .trace_analyzer import TraceAnalyzer
+from .nrppa_transport_analyzer import NRPPaTransportAnalyzer
+from .timeout_detector import TimeoutDetector
+from .retransmission_detector import RetransmissionDetector
 
 
 class ProcedureAnalysisEngine:
@@ -49,6 +52,9 @@ class ProcedureAnalysisEngine:
         self.path_switch_analyzer = PathSwitchAnalyzer()
         self.ran_status_transfer_analyzer = RANStatusTransferAnalyzer()
         self.trace_analyzer = TraceAnalyzer()
+        self.nrppa_analyzer = NRPPaTransportAnalyzer()
+        self.timeout_detector = TimeoutDetector()
+        self.retransmission_detector = RetransmissionDetector()
 
     def process(self, ue_contexts: List[UEContext], global_events: List[ProtocolEvent]) -> List[Procedure]:
         """
@@ -62,7 +68,12 @@ class ProcedureAnalysisEngine:
         global_unclassified = self.unclassified_collector.analyze(global_events)
         global_config_procs = self.config_update_analyzer.analyze(global_events)
         global_error_procs = self.error_indication_analyzer.analyze(global_events)
-        global_procs = ng_setup_procs + transport_procs + global_unclassified + global_config_procs + global_error_procs
+        global_nrppa_procs = self.nrppa_analyzer.analyze(global_events)
+        global_procs = ng_setup_procs + transport_procs + global_unclassified + global_config_procs + global_error_procs + global_nrppa_procs
+
+        # Run timeouts and duplicates on global procedures
+        self.timeout_detector.detect_timeouts(global_procs, global_events)
+        self.retransmission_detector.detect_retransmissions(global_procs)
 
         # Process per-UE procedures
         for ue in ue_contexts:
@@ -85,13 +96,19 @@ class ProcedureAnalysisEngine:
             ps_procs = self.path_switch_analyzer.analyze(ue.events)
             status_xfer_procs = self.ran_status_transfer_analyzer.analyze(ue.events)
             trace_procs = self.trace_analyzer.analyze(ue.events)
+            nrppa_procs = self.nrppa_analyzer.analyze(ue.events)
             ue_unclassified = self.unclassified_collector.analyze(ue.events)
 
             all_ue_procs = (
                 reg_procs + auth_procs + sec_procs + service_procs + pdu_procs + ctx_procs + paging_procs +
                 nas_non_deliv_procs + identity_procs + ue_config_procs + error_ind_procs + ho_procs +
-                ps_procs + status_xfer_procs + trace_procs + ue_unclassified
+                ps_procs + status_xfer_procs + trace_procs + nrppa_procs + ue_unclassified
             )
+
+            # Run timeouts and duplicates on UE procedures
+            self.timeout_detector.detect_timeouts(all_ue_procs, ue.events)
+            self.retransmission_detector.detect_retransmissions(all_ue_procs)
+
             ue.procedures = all_ue_procs
 
             # Populate explicit failures and incomplete summaries
